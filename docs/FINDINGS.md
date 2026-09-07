@@ -13,11 +13,14 @@ Everything else follows from that one mismatch.
 
 | | stock | corrected |
 |---|---|---|
-| PL1 sustained | 55 W | 40 W |
-| PL2 burst | 130 W | 75 W |
+| PL1 sustained | 55 W | 45 W |
+| PL2 burst | 130 W | 90 W |
 | PL1 window (tau) | 56 s | 8 s |
 | Fan | ~2600 rpm auto | 4300 rpm pinned |
 | Result | 97 °C, chronic throttling | 70–72 °C, none |
+
+Validated: zero PROCHOT events across 240 s of combined CPU+GPU load
+(CPU 81 °C peak / 73 °C avg, GPU sustained 40 W).
 
 ---
 
@@ -105,10 +108,20 @@ The combined CPU+GPU case matters because both share one heatpipe and one fan.
 
 ---
 
+## Resolved since first draft
+
+- **Fan curve** — `FACT` is unreachable via WMI, and `SFAN` discards the
+  temperature fields it declares. The real fix was `model_secn`'s
+  `access_method_fancurve`: `WMI3` → `EC3`. Temps and RPM now read correctly.
+- **GPU throttling** — the hotspot sensor is not needed. NVML throttle-reason
+  bits work on driver 610.57.04 and are a direct signal. Direct BAR0 reads at
+  the LACT offset (`0xad0aa0`) are blocked by `CONFIG_IO_STRICT_DEVMEM` while
+  nvidia holds the region; that belongs in a kernel module, not userspace.
+- **Combined load** — validated, zero PROCHOT.
+- **Persistence** — `systemd/83sc-thermal.{sh,service}`, with runtime profiles.
+
 ## Open items
 
-1. Locate the WMI method that writes `FACT` (custom fan curve with temperatures).
-2. Reach the 5400 rpm ceiling in `FTTD`.
-3. Unlock the RTX 50-series GPU hotspot sensor — NVIDIA disabled it; without it, GPU throttling cannot be confirmed.
-4. Validate under real combined load.
-5. Persistence (systemd unit) once a config is chosen.
+1. Reach the 5400 rpm ceiling declared in `FTTD` (observed rarely under Windows).
+2. Per-model pwm↔rpm scaling — `MAX_RPM` 10000 skews reported duty by ~2×.
+3. Tune PL1 between 45 W and 55 W; 45 W is proven, not optimised.
