@@ -1,12 +1,15 @@
 [Unit]
 Description=83SC thermal limits (LOQ Essential 15IRX11)
-After=multi-user.target
+After=multi-user.target systemd-modules-load.service
+Wants=systemd-modules-load.service
 ConditionPathExists=/sys/class/powercap/intel-rapl:0
 
 [Service]
 Type=oneshot
 RemainAfterExit=yes
-ExecStart=/usr/local/lib/83sc-control/83sc-thermal.sh
+ExecStart=/usr/local/lib/83sc-control/83sc-thermal.sh game
+StandardOutput=journal
+StandardError=journal
 
 [Install]
 WantedBy=multi-user.target
