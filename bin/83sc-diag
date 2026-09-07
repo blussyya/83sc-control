@@ -1,0 +1,119 @@
+#!/usr/bin/env python3
+import json
+import subprocess
+import sys
+
+HELPER = "/usr/local/lib/83sc-control/helper.py"
+
+_tty = sys.stdout.isatty()
+def c(code, s): return f"\033[{code}m{s}\033[0m" if _tty else str(s)
+BOLD = lambda s: c("1", s); DIM = lambda s: c("2", s)
+RED = lambda s: c("31", s); GRN = lambda s: c("32", s); YEL = lambda s: c("33", s); CYA = lambda s: c("36", s)
+
+def msr(addr, cpu=0):
+    r = subprocess.run(["sudo", "-n", HELPER, "msr", hex(addr), str(cpu)],
+                       capture_output=True, text=True)
+    if r.returncode != 0:
+        return None
+    return json.loads(r.stdout)["decimal"]
+
+def bits(v, hi, lo):
+    return (v >> lo) & ((1 << (hi - lo + 1)) - 1)
+
+def flag(v, b):
+    return bool(v >> b & 1)
+
+def yn(b, true_is_bad=True):
+    if b:
+        return RED("YES") if true_is_bad else GRN("YES")
+    return GRN("no") if true_is_bad else DIM("no")
+
+def main():
+    print()
+
+    pi = msr(0xCE)
+    if pi is None:
+        sys.exit("83sc-diag: could not read MSRs (is the helper installed?)")
+    base = bits(pi, 15, 8)
+    minr = bits(pi, 47, 40)
+    print(BOLD("  RATIO ENVELOPE") + DIM("   MSR_PLATFORM_INFO 0xCE"))
+    print(f"    base (max non-turbo)   {base * 100} MHz")
+    print(f"    min efficiency ratio   {minr * 100} MHz   " +
+          DIM("<- the real floor; nothing can clock below this except duty cycling"))
+    print(f"    turbo ratio programmable  {yn(flag(pi, 28), False)}")
+    print(f"    TDP limit programmable    {yn(flag(pi, 29), False)}")
+
+    trl = msr(0x1AD)
+    if trl:
+        print()
+        print(BOLD("  TURBO RATIOS") + DIM("   MSR_TURBO_RATIO_LIMIT 0x1AD"))
+        r = [bits(trl, 8 * i + 7, 8 * i) for i in range(8)]
+        print("    active cores  " + "  ".join(f"{i+1}c" for i in range(8)))
+        print("    max GHz       " + "  ".join(f"{x/10:.1f}" for x in r))
+
+    tt = msr(0x1A2)
+    print()
+    print(BOLD("  THERMAL TARGET") + DIM("   MSR_TEMPERATURE_TARGET 0x1A2"))
+    tjmax = bits(tt, 23, 16)
+    offset = bits(tt, 29, 24)
+    print(f"    Tjmax                  {tjmax}C")
+    print(f"    TCC activation offset  {offset}C")
+    print(f"    {BOLD('throttles at')}           {RED(f'{tjmax - offset}C')}   "
+          + DIM("<- this is the wall"))
+
+    for name, addr in (("CORE", 0x19C), ("PACKAGE", 0x1B1)):
+        v = msr(addr)
+        if v is None:
+            continue
+        print()
+        print(BOLD(f"  {name} THERMAL STATUS") + DIM(f"   {addr:#x}"))
+        readout = bits(v, 22, 16)
+        print(f"    current temp           {tjmax - readout}C  " + DIM(f"({readout}C below Tjmax)"))
+        print(f"    thermal limit now      {yn(flag(v, 0))}        sticky log  {yn(flag(v, 1))}")
+        print(f"    PROCHOT now            {yn(flag(v, 2))}        sticky log  {yn(flag(v, 3))}")
+        print(f"    critical temp          {yn(flag(v, 4))}        sticky log  {yn(flag(v, 5))}")
+        print(f"    power limitation       {yn(flag(v, 10))}        sticky log  {yn(flag(v, 11))}")
+
+    plr = msr(0x64F)
+    if plr is not None:
+        print()
+        print(BOLD("  PERF LIMIT REASONS") + DIM("   MSR_CORE_PERF_LIMIT_REASONS 0x64F"))
+        reasons = [(0, "PROCHOT"), (1, "Thermal"), (5, "Running avg thermal limit"),
+                   (6, "VR thermal alert"), (7, "VR thermal design current"),
+                   (8, "Other"), (10, "PL1 package power"), (11, "PL2 package power"),
+                   (12, "Max turbo limit"), (13, "Turbo transition attenuation")]
+        print(DIM("    reason                        active   has fired"))
+        for b, label in reasons:
+            now, log = flag(plr, b), flag(plr, b + 16)
+            if now or log:
+                print(f"    {label:<28}  {yn(now):<12} {yn(log)}")
+        if not any(flag(plr, b) or flag(plr, b + 16) for b, _ in reasons):
+            print(DIM("    (nothing logged since last clear)"))
+
+    pu = msr(0x606)
+    pl = msr(0x610)
+    if pu is not None and pl is not None:
+        punit = 1.0 / (1 << bits(pu, 3, 0))
+        tunit = 1.0 / (1 << bits(pu, 19, 16))
+
+        def window(y, z):
+            return (1 << y) * (1 + z / 4.0) * tunit
+
+        print()
+        print(BOLD("  PACKAGE POWER LIMITS") + DIM("   MSR_PKG_POWER_LIMIT 0x610"))
+        pl1 = bits(pl, 14, 0) * punit
+        pl1_en = flag(pl, 15)
+        pl1_w = window(bits(pl, 21, 17), bits(pl, 23, 22))
+        pl2 = bits(pl, 46, 32) * punit
+        pl2_en = flag(pl, 47)
+        pl2_w = window(bits(pl, 53, 49), bits(pl, 55, 54))
+        locked = flag(pl, 63)
+        print(f"    PL1 sustained          {BOLD(f'{pl1:.0f}W')}  enabled={pl1_en}  window {pl1_w:.0f}s")
+        print(f"    PL2 burst              {BOLD(f'{pl2:.0f}W')}  enabled={pl2_en}  window {pl2_w:.3f}s")
+        print(f"    {BOLD('MSR locked by BIOS')}     {yn(locked)}   "
+              + (DIM("<- writable, we can set limits directly") if not locked
+                 else RED("<- firmware sealed these")))
+    print()
+
+if __name__ == "__main__":
+    main()

@@ -1,0 +1,12 @@
+[Unit]
+Description=83SC thermal limits (LOQ Essential 15IRX11)
+After=multi-user.target
+ConditionPathExists=/sys/class/powercap/intel-rapl:0
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/lib/83sc-control/83sc-thermal.sh
+
+[Install]
+WantedBy=multi-user.target

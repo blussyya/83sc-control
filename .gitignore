@@ -1,0 +1,9 @@
+acpi/
+fork/
+*.dat
+__pycache__/
+*.pyc
+*.ko
+*.o
+harness/gpuburn
+readme.txt

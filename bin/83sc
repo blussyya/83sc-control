@@ -1,0 +1,327 @@
+#!/usr/bin/env python3
+USAGE = """
+83sc -- hardware control for the Lenovo LOQ Essential 15IRX11 (DMI 83SC)
+
+  83sc status              show full machine state
+  83sc watch [secs]        live thermal/clock/throttle monitor
+  83sc targets             list every writable setting
+  83sc set <tgt> <val>     write one setting
+  83sc get <tgt>           read one setting
+  83sc preset <name>       apply a named configuration
+  83sc presets             list presets
+  83sc throttle-reset      note current throttle counters as a new baseline
+"""
+
+import json
+import os
+import shutil
+import subprocess
+import sys
+import time
+
+HELPER = "/usr/local/lib/83sc-control/helper.py"
+STATE = os.path.expanduser("~/.cache/83sc-control")
+
+_tty = sys.stdout.isatty()
+def c(code, s):
+    return f"\033[{code}m{s}\033[0m" if _tty else str(s)
+BOLD = lambda s: c("1", s)
+DIM = lambda s: c("2", s)
+RED = lambda s: c("31", s)
+GRN = lambda s: c("32", s)
+YEL = lambda s: c("33", s)
+CYA = lambda s: c("36", s)
+
+def helper(*args, check=True):
+    if not os.path.exists(HELPER):
+        sys.exit("83sc: helper not installed. Run:  sudo ./install.sh")
+    r = subprocess.run(["sudo", "-n", HELPER, *args], capture_output=True, text=True)
+    if r.returncode != 0 and check:
+        msg = (r.stderr or r.stdout).strip()
+        if "password is required" in msg:
+            sys.exit("83sc: sudo rule missing. Run:  sudo ./install.sh")
+        sys.exit(f"83sc: helper failed ({r.returncode}): {msg}")
+    return r
+
+def status_json():
+    return json.loads(helper("status").stdout)
+
+def _n(v, default=None):
+    try:
+        return int(v)
+    except (TypeError, ValueError):
+        return default
+
+def fmt_temp(mc):
+    v = _n(mc)
+    if v is None:
+        return DIM("n/a")
+    t = v / 1000.0
+    s = f"{t:.0f}C"
+    return RED(s) if t >= 90 else YEL(s) if t >= 80 else GRN(s)
+
+def cmd_status():
+    s = status_json()
+    d = s["dmi"]
+    print()
+    print(BOLD(f"  {d.get('product_version')}  ({d.get('product_name')})   BIOS {d.get('bios_version')} {d.get('bios_date')}"))
+    print()
+
+    prof = s.get("profile")
+    pm = s["legion"].get("powermode")
+    custom = prof == "custom"
+    print(BOLD("  MODE"))
+    print(f"    platform profile   {CYA(prof)}   " + (GRN("(custom: power limits are live)") if custom
+          else DIM("(canned mode: ppt_* limits are locked)")))
+    print(f"    EC powermode       {pm}        thermalmode {s['legion'].get('thermalmode')}")
+
+    print()
+    print(BOLD("  CPU POWER") + DIM("   -- what the silicon actually enforces"))
+    rapl = s.get("rapl", {})
+    for key, label in (("long_term", "PL1 sustained"), ("short_term", "PL2 burst"), ("peak_power", "peak")):
+        r = rapl.get(key)
+        if not r:
+            continue
+        uw = _n(r.get("power_limit_uw"))
+        tw = _n(r.get("time_window_us"))
+        w = f"{uw/1e6:.0f}W" if uw else "n/a"
+        win = f"  tau {tw/1e6:.1f}s" if tw else ""
+        print(f"    {label:<16} {BOLD(w):<14}{DIM(win)}")
+
+    print(DIM("    -- firmware knobs (writable in custom mode)"))
+    for attr, label in (("ppt_pl1_spl", "pl1"), ("ppt_pl2_sppt", "pl2"), ("ppt_pl3_fppt", "pl3")):
+        a = s["fwattr"].get(attr, {})
+        cur = a.get("current_value")
+        rng = f"[{a.get('min_value')}-{a.get('max_value')}]" if a.get("min_value") else ""
+        shown = f"{cur}W" if cur else DIM("locked")
+        print(f"    {label:<16} {shown:<14}{DIM(rng)}")
+
+    print()
+    print(BOLD("  THERMAL"))
+    th = s.get("thermal", {})
+    print(f"    package temp       {fmt_temp(th.get('package_temp_mc'))}"
+          f"      EC trip {s['legion'].get('cpu_temperature_limit')}C"
+          f"   GPU trip {s['legion'].get('gpu_temperature_limit')}C")
+    pkt = _n(th.get("package_throttle_count"), 0)
+    pktt = _n(th.get("package_throttle_total_time_ms"), 0)
+    base = load_baseline()
+    delta = ""
+    if base:
+        dc = pkt - base.get("package_throttle_count", 0)
+        dt = pktt - base.get("package_throttle_total_time_ms", 0)
+        delta = DIM(f"   (+{dc} / +{dt}ms since baseline)")
+    col = RED if pkt else GRN
+    print(f"    PROCHOT events     {col(pkt)}  total {pktt/1000.0:.1f}s{delta}")
+    print(DIM("    PROCHOT drops the CPU below the cpufreq floor -- this is the stutter"))
+
+    print()
+    print(BOLD("  COOLING"))
+    f1, f2 = s["fans"].get("fan1", {}), s["fans"].get("fan2", {})
+    r1, r2 = _n(f1.get("rpm"), 0), _n(f2.get("rpm"), 0)
+    mx = _n(f1.get("max"), 0) or 1
+    print(f"    fan1 {r1} rpm   fan2 {r2} rpm   " + DIM(f"max {mx}  ({100*r1//mx}% duty)"))
+    print(f"    fan_fullspeed {s['legion'].get('fan_fullspeed')}"
+          f"   fan_maxspeed {s['legion'].get('fan_maxspeed')}"
+          f"   unlock {s['legion'].get('fan_unlock')}")
+    curve = s.get("curve", [])
+    if curve and all(_n(p.get("cpu_temp"), 0) == 0 for p in curve):
+        print("    " + YEL("fan curve table reads all-zero -- LLL EC offsets are wrong for this model"))
+        print(DIM("    do not write the curve until the layout is reversed"))
+
+    print()
+    print(BOLD("  CPUFREQ"))
+    cf = s["cpufreq"]
+    print(f"    driver {cf['driver']}  governor {CYA(cf['governor'])}  epp {cf['epp']}")
+    smin, smax = _n(cf["scaling_min_khz"], 0), _n(cf["scaling_max_khz"], 0)
+    hmin, hmax = _n(cf["hw_min_khz"], 0), _n(cf["hw_max_khz"], 0)
+    print(f"    range  {smin/1e6:.2f} - {smax/1e6:.2f} GHz" + DIM(f"   (hw {hmin/1e6:.2f} - {hmax/1e6:.2f})"))
+    print(f"    turbo  {'off' if cf['no_turbo']=='1' else 'on'}   perf pct {cf['min_perf_pct']}-{cf['max_perf_pct']}")
+    print()
+
+def cmd_watch(argv):
+    interval = float(argv[0]) if argv else 1.0
+    print(DIM("  sampling; Ctrl-C to stop\n"))
+    hdr = f"  {'time':>8}  {'pkg':>5}  {'fan1':>6} {'fan2':>6}  {'PROCHOT':>9}  {'+ms':>7}  {'avg GHz':>8}"
+    base = None
+    n = 0
+    try:
+        while True:
+            s = status_json()
+            th = s["thermal"]
+            cur = (_n(th.get("package_throttle_count"), 0), _n(th.get("package_throttle_total_time_ms"), 0))
+            if base is None:
+                base = cur
+            freqs = []
+            for cpu in os.listdir("/sys/devices/system/cpu"):
+                p = f"/sys/devices/system/cpu/{cpu}/cpufreq/scaling_cur_freq"
+                if os.path.exists(p):
+                    v = _n(open(p).read().strip())
+                    if v:
+                        freqs.append(v)
+            avg = sum(freqs) / len(freqs) / 1e6 if freqs else 0
+            if n % 20 == 0:
+                print(BOLD(hdr))
+            dc, dt = cur[0] - base[0], cur[1] - base[1]
+            mark = RED(f"{dc:>9}") if dc else GRN(f"{dc:>9}")
+            print(f"  {time.strftime('%H:%M:%S'):>8}  {fmt_temp(th.get('package_temp_mc')):>5}  "
+                  f"{_n(s['fans'].get('fan1',{}).get('rpm'),0):>6} {_n(s['fans'].get('fan2',{}).get('rpm'),0):>6}  "
+                  f"{mark}  {dt:>7}  {avg:>8.2f}")
+            n += 1
+            time.sleep(interval)
+    except KeyboardInterrupt:
+        print(DIM("\n  stopped"))
+
+PL1_W = 40
+PL2_W = 75
+TAU_S = 8
+
+PRESETS = {
+    "stock": {
+        "desc": "Factory defaults: PL1 55W, PL2 130W, tau 56s, auto fans. "
+                "This is the configuration that stutters.",
+        "steps": [("powermode", "3"), ("fan_full", "0"),
+                  ("rapl_pl1_uw", "55000000"), ("rapl_pl2_uw", "130000000"),
+                  ("rapl_tau_us", "56000000")],
+    },
+    "cs2": {
+        "desc": f"Verified fix. PL1 {PL1_W}W / PL2 {PL2_W}W / tau {TAU_S}s, fans pinned 4300rpm. "
+                "Held 70-72C with zero throttling through a 14-thread all-core "
+                "stress test; keeps full single-core boost for CS2's main thread.",
+        "steps": [("powermode", "255"), ("fan_full", "1"),
+                  ("rapl_pl1_uw", str(PL1_W * 1_000_000)),
+                  ("rapl_pl2_uw", str(PL2_W * 1_000_000)),
+                  ("rapl_tau_us", str(TAU_S * 1_000_000))],
+    },
+    "cooler": {
+        "desc": "More headroom if 'cs2' still trips PROCHOT in a long match.",
+        "steps": [("powermode", "255"), ("fan_full", "1"),
+                  ("rapl_pl1_uw", "35000000"), ("rapl_pl2_uw", "60000000"),
+                  ("rapl_tau_us", "6000000")],
+    },
+    "quiet": {
+        "desc": "Low power and low noise. Not for gaming.",
+        "steps": [("powermode", "1"), ("fan_full", "0"),
+                  ("rapl_pl1_uw", "25000000"), ("rapl_pl2_uw", "45000000")],
+    },
+    "fallback-3g5": {
+        "desc": "The original proven workaround: hard 3.5GHz cap. Kept because "
+                "it has logged zero stutters across three matches. Costs burst "
+                "clocks the 'cs2' preset preserves.",
+        "steps": [("governor", "performance"), ("freq_max", "3500000")],
+    },
+}
+
+def cmd_presets():
+    print()
+    for name, p in PRESETS.items():
+        print(f"  {BOLD(name)}")
+        print(f"    {p['desc']}")
+        print(DIM("    " + "  ".join(f"{k}={v}" for k, v in p["steps"])))
+        print()
+
+def cmd_preset(argv):
+    if not argv or argv[0] not in PRESETS:
+        sys.exit(f"83sc: unknown preset. Options: {', '.join(PRESETS)}")
+    name = argv[0]
+    p = PRESETS[name]
+    print(f"\n  applying {BOLD(name)}: {p['desc']}\n")
+    failed = 0
+    for target, value in p["steps"]:
+        r = helper("set", target, value, check=False)
+        try:
+            out = json.loads(r.stdout)
+            after = out.get("after", out.get("value"))
+            if r.returncode == 0:
+                mark, note = GRN("ok  "), DIM(f"readback {after}")
+            elif r.returncode == 4:
+                a, w = _n(after), _n(value)
+                close = a is not None and w and abs(a - w) <= max(1, abs(w) // 100)
+                if close:
+                    mark, note = GRN("ok  "), DIM(f"quantized to {after}")
+                else:
+                    mark, note = YEL("clamp"), DIM(f"firmware set {after}, not {value}")
+                    failed += 1
+            else:
+                mark, note = RED("FAIL"), DIM((r.stderr or "").strip()[:70])
+                failed += 1
+            print(f"    {mark}  {target:<12} = {value:<10} {note}")
+        except (json.JSONDecodeError, AttributeError):
+            print(f"    {RED('FAIL')}  {target:<12} = {value:<10} {DIM((r.stderr or '').strip()[:70])}")
+            failed += 1
+    print()
+    if failed:
+        print(f"  {YEL(f'{failed} step(s) failed')} -- run '83sc status' to see actual state\n")
+    else:
+        print(f"  {GRN('applied')}\n")
+    return 1 if failed else 0
+
+def baseline_path():
+    return os.path.join(STATE, "throttle-baseline.json")
+
+def load_baseline():
+    try:
+        with open(baseline_path()) as f:
+            return json.load(f)
+    except (OSError, json.JSONDecodeError):
+        return None
+
+def cmd_throttle_reset():
+    s = status_json()
+    os.makedirs(STATE, exist_ok=True)
+    th = {k: _n(v, 0) for k, v in s["thermal"].items() if "throttle" in k}
+    with open(baseline_path(), "w") as f:
+        json.dump(th, f)
+    print(f"  baseline noted: {th.get('package_throttle_count')} PROCHOT events, "
+          f"{th.get('package_throttle_total_time_ms')}ms")
+    print(DIM("  the kernel counters only ever increase, so 'status' now shows the delta"))
+
+def cmd_set(argv):
+    if len(argv) != 2:
+        sys.exit("usage: 83sc set <target> <value>   (see: 83sc targets)")
+    target, value = argv
+    if target in ("pl1", "pl2", "pl3"):
+        cur = status_json().get("profile")
+        if cur != "custom":
+            print(DIM(f"  note: profile is '{cur}'; switching to 'custom' so {target} is writable"))
+            helper("set", "profile", "custom", check=False)
+    r = helper("set", target, value, check=False)
+    sys.stdout.write(r.stdout)
+    if r.stderr:
+        sys.stderr.write(r.stderr)
+    return r.returncode
+
+def cmd_get(argv):
+    if len(argv) != 1:
+        sys.exit("usage: 83sc get <target>")
+    print(json.dumps(status_json(), indent=2))
+
+def main():
+    if len(sys.argv) < 2:
+        print(USAGE)
+        return 1
+    verb, rest = sys.argv[1], sys.argv[2:]
+    if verb == "status":
+        return cmd_status()
+    if verb == "watch":
+        return cmd_watch(rest)
+    if verb == "targets":
+        sys.stdout.write(helper("targets").stdout)
+        return 0
+    if verb == "set":
+        return cmd_set(rest)
+    if verb == "get":
+        return cmd_get(rest)
+    if verb == "preset":
+        return cmd_preset(rest)
+    if verb == "presets":
+        return cmd_presets()
+    if verb == "throttle-reset":
+        return cmd_throttle_reset()
+    if verb in ("raw",):
+        sys.stdout.write(helper(*rest).stdout)
+        return 0
+    print(USAGE)
+    return 1
+
+if __name__ == "__main__":
+    sys.exit(main() or 0)
