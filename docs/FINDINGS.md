@@ -79,7 +79,7 @@ Ramp rates differ sharply by mode — at 80 °C: mode 3 (perf) = 2300 rpm, mode 
 
 | Goal | Working path | Broken path |
 |---|---|---|
-| Custom mode | `powermode` = **255** | `platform_profile` = `custom` → EINVAL |
+| Custom mode | `powermode` = **255** | `platform_profile` = `custom` → EINVAL *(correct: `custom` is read-only status per kernel ABI, not a bug)* |
 | Extreme mode | `powermode` = **224** | — |
 | Power limits | **RAPL** `constraint_*_power_limit_uw` | `ppt_pl1_spl` / `ppt_pl2_sppt` → EINVAL |
 | Max fan | `fan_fullspeed` = 1 **in powermode 255** | `fan_fullspeed` in mode 3 → silent no-op |
@@ -89,9 +89,18 @@ Ramp rates differ sharply by mode — at 80 °C: mode 3 (perf) = 2300 rpm, mode 
 ### ACPI fan structures
 
 - **`FAT2`** (88 B) — what LLL implements via `GFAN`. `FTS0-9` and `FSS0-9` are *duplicate* copies of the same speed array. **No temperature data.**
-- **`FACT`** (72 B) — the real structure: `FNS0-9` (speeds, 16-bit rpm), `SEID` (sensor id), **`SST0-9` (temperature trip points)**, plus `SOU1-4`, `CFMS`, `CFIS`, `FSSP`, `MST1/2`, `MSTP`.
+- **`FACT`** (72 B) — `FNS0-9` (speeds), `SEID`, **`SST0-9` (trip points)**, plus `SOU1-4`, `CFMS`, `CFIS`, `FSSP`, `MST1/2`, `MSTP`. Populated by `SFTW()` from the `FNT0`/`FNT1` packages (15 tables × 35 elements) — **firmware-internal, not reachable via WMI.**
 
-`SFTW(idx)` populates `FACT` from the `FNT0`/`FNT1` packages (15 tables × 35 elements). The WMI method that *writes* `FACT` has not yet been located — `_WDG` in SSDT4 is a dynamic method, so GUID→method-ID mapping is still open. Windows can write custom curves, so the path exists.
+**WMI dispatch (resolved).** The fan GUID `92549549-4BDE-4F06-AC04-CE8BF898DBAA` maps to ACPI method `WMAB`, which handles exactly two ids:
+
+```
+Arg1 == 0x05  ->  GFAN (FID0, SID0)     get  (returns FAT2, speeds only)
+Arg1 == 0x06  ->  SFAN (Arg2)           set
+```
+
+`SFAN` declares ten temperature words (`F00F`–`F018`), a sensor id (`F00D`) and sensor length (`F00E`) — and **never reads any of them**; each appears exactly once across all 238 lines, in its own declaration. Thresholds come from internal packages `FI00`–`FI09` chosen by power mode. Further, `F003`–`F00C` are **indices into a preset speed table**, not RPM: `CRP0 = Local0[F003 + 2] / 100`.
+
+**Conclusion:** fan-curve temperatures cannot be written on this model by any caller, Windows included. Reading them works via the EC (`ACCESS_METHOD_EC3`), which is the fix applied.
 
 ---
 
@@ -101,10 +110,14 @@ Ramp rates differ sharply by mode — at 80 °C: mode 3 (perf) = 2300 rpm, mode 
 |---|---|
 | CPU-only, 14 threads, 90 s | **70–72 °C, zero throttling** after tau engages |
 | tau 56 s → 8 s | initial-spike events **1176 → 91** (−92%) |
-| CPU + GPU combined | **Not validated** — `stress-ng --gpu` never engaged the dGPU (3.5 W = idle, no display context) |
+| CPU + GPU combined, 240 s | **0 PROCHOT events**, CPU 81 °C peak / 73 °C avg, GPU 40 W sustained |
+| Fan curve after `EC3` fix | real trip temps + rpm, matching firmware `FNT0` exactly |
+| `fan_fullspeed` guard | `EBUSY` in powermode 3, succeeds in 255 |
 | Real CS2 match | **Not yet run** |
 
-The combined CPU+GPU case matters because both share one heatpipe and one fan.
+Note: an earlier combined run measured nothing because `stress-ng --gpu` never
+engaged the dGPU (3.5 W = idle, no display context). The 240 s result above used
+a CUDA load reaching a real 40 W.
 
 ---
 
