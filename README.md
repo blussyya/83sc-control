@@ -37,6 +37,7 @@ Edit the values at the top of `83sc-thermal.sh` (plain watts and seconds).
 | `systemd/` | boot-time power limits — this is the actual fix |
 | `bin/83sc` | CLI: status, live watch, presets, arbitrary knob writes |
 | `bin/83sc-diag` | decodes the Intel MSRs that explain throttling |
+| `bin/83sc-fan` | fan curve: show, apply a preset, restore firmware defaults |
 | `bin/83sc-snap` | one-line state snapshot |
 | `helper/helper.py` | root helper; writes are confined to hardware subsystems |
 | `harness/` | stress + monitor tooling, run logging |

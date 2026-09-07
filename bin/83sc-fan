@@ -1,0 +1,189 @@
+#!/usr/bin/env python3
+import json
+import os
+import subprocess
+import sys
+import time
+
+HELPER = "/usr/local/lib/83sc-control/helper.py"
+LEGION = "/sys/bus/platform/devices/PNP0C09:00"
+
+USAGE = """
+83sc-fan -- fan curve control for the LOQ Essential 15IRX11
+
+  83sc-fan show               print the live curve
+  83sc-fan apply <preset>     write a curve
+  83sc-fan presets            list presets
+  83sc-fan stock              reload the firmware curve (powermode toggle)
+
+The stock curve sits at 0 rpm until 75C then jumps straight to 3400 rpm, which
+is why the fan is silent and then suddenly loud. These presets ramp earlier and
+in smaller steps.
+
+Note: fan_fullspeed pins the fan to maximum and overrides the curve entirely,
+so apply turns it off. minifancurve lets the fan stop completely when cold and
+is also turned off, otherwise point 1 is ignored.
+"""
+
+# (upper_temp_C, rpm). Lower/hysteresis temp is derived per point.
+PRESETS = {
+    "gradual": [(50, 1200), (55, 1500), (60, 1900), (65, 2300), (70, 2700),
+                (75, 3100), (80, 3500), (85, 3900), (88, 4300), (92, 4300)],
+    "quiet":   [(55, 1000), (62, 1300), (68, 1600), (72, 2000), (76, 2400),
+                (80, 2900), (84, 3400), (87, 3900), (90, 4300), (94, 4300)],
+    "cool":    [(45, 1500), (50, 2000), (55, 2500), (60, 3000), (65, 3400),
+                (70, 3800), (75, 4100), (80, 4300), (85, 4300), (90, 4300)],
+}
+
+_tty = sys.stdout.isatty()
+def c(k, s): return f"\033[{k}m{s}\033[0m" if _tty else str(s)
+B = lambda s: c("1", s); D = lambda s: c("2", s)
+R = lambda s: c("31", s); G = lambda s: c("32", s); Y = lambda s: c("33", s)
+
+
+def hwmon():
+    base = "/sys/class/hwmon"
+    for e in sorted(os.listdir(base)):
+        p = os.path.join(base, e)
+        try:
+            if open(os.path.join(p, "name")).read().strip() == "legion_hwmon":
+                return p
+        except OSError:
+            pass
+    sys.exit("83sc-fan: legion_hwmon not found (is legion_laptop loaded?)")
+
+
+def read(p, d=None):
+    try:
+        return open(p).read().strip()
+    except OSError:
+        return d
+
+
+def num(v, d=0):
+    try:
+        return int(v)
+    except (TypeError, ValueError):
+        return d
+
+
+def put(path, value):
+    r = subprocess.run(["sudo", "-n", HELPER, "set", path, str(value)],
+                       capture_output=True, text=True)
+    return r.returncode in (0, 4)
+
+
+def max_rpm(h):
+    return num(read(f"{h}/fan1_max"), 5400) or 5400
+
+
+def rpm_to_pwm(rpm, mx):
+    return max(0, min(255, round(rpm * 255 / mx)))
+
+
+def pwm_to_rpm(pwm, mx):
+    return round(pwm * mx / 255 / 100) * 100
+
+
+def cmd_show():
+    h = hwmon()
+    mx = max_rpm(h)
+    print(f"\n  fan_max {mx} rpm   fan_fullspeed={read(f'{LEGION}/fan_fullspeed')}"
+          f"   minifancurve={read(f'{h}/minifancurve')}   powermode={read(f'{LEGION}/powermode')}")
+    print(D(f"  current fan {read(f'{h}/fan1_input')} rpm, cpu {num(read(f'{h}/temp1_input'))//1000}C\n"))
+    print(B(f"  {'pt':<4}{'temp':>8}{'hyst':>8}{'rpm':>8}{'pwm':>7}"))
+    for p in range(1, 11):
+        pwm = num(read(f"{h}/pwm1_auto_point{p}_pwm"))
+        print(f"  {p:<4}{num(read(f'{h}/pwm1_auto_point{p}_temp')):>7}C"
+              f"{num(read(f'{h}/pwm1_auto_point{p}_temp_hyst')):>7}C"
+              f"{pwm_to_rpm(pwm, mx):>8}{pwm:>7}")
+    print()
+
+
+def cmd_presets():
+    print()
+    for name, pts in PRESETS.items():
+        print(f"  {B(name)}")
+        print(D("    " + "  ".join(f"{t}C:{r}" for t, r in pts)))
+    print(f"\n  {B('stock')}\n" + D("    reload the firmware curve\n"))
+
+
+def cmd_apply(argv):
+    if not argv or argv[0] not in PRESETS:
+        sys.exit(f"83sc-fan: unknown preset. options: {', '.join(PRESETS)}, stock")
+    name = argv[0]
+    pts = PRESETS[name]
+    h = hwmon()
+    mx = max_rpm(h)
+
+    print(f"\n  applying {B(name)}\n")
+
+    # fan_fullspeed overrides the curve, and minifancurve permits a full stop.
+    # Both must be off or the curve below is cosmetic.
+    if read(f"{LEGION}/fan_fullspeed") != "0":
+        print(D("  turning off fan_fullspeed (it overrides the curve)"))
+        put(f"{LEGION}/fan_fullspeed", 0)
+    if read(f"{h}/minifancurve") not in ("0", None):
+        print(D("  turning off minifancurve (it lets the fan stop entirely)"))
+        put(f"{h}/minifancurve", 0)
+
+    # Temperatures must stay monotonic at every intermediate step, so walk the
+    # points from the top down: each write only ever lowers a value that is
+    # already above its neighbour.
+    for i in range(9, -1, -1):
+        t, rpm = pts[i]
+        hyst = max(0, t - 5) if i else max(0, t - 8)
+        put(f"{h}/pwm1_auto_point{i+1}_temp", t)
+        put(f"{h}/pwm1_auto_point{i+1}_temp_hyst", hyst)
+        put(f"{h}/pwm1_auto_point{i+1}_pwm", rpm_to_pwm(rpm, mx))
+
+    time.sleep(1)
+    ok = True
+    print(B(f"\n  {'pt':<4}{'want':>10}{'got':>10}{'status':>10}"))
+    for i, (t, rpm) in enumerate(pts, 1):
+        gt = num(read(f"{h}/pwm1_auto_point{i}_temp"))
+        gr = pwm_to_rpm(num(read(f"{h}/pwm1_auto_point{i}_pwm")), mx)
+        # rpm quantises to the pwm grid, so allow one step of slack
+        good = gt == t and abs(gr - rpm) <= mx / 255 * 100
+        ok = ok and good
+        mark = G("ok") if good else Y("differs")
+        print(f"  {i:<4}{f'{t}C/{rpm}':>10}{f'{gt}C/{gr}':>10}{mark:>19}")
+    print()
+    if ok:
+        print(f"  {G('applied')}   " + D("revert with: 83sc-fan stock\n"))
+    else:
+        print(f"  {Y('some points differ')} " +
+              D("- rpm quantises to the pwm grid; temps differing means the\n"
+                "  firmware rejected them (must increase monotonically)\n"))
+
+
+def cmd_stock():
+    pm = read(f"{LEGION}/powermode") or "255"
+    print(D(f"\n  reloading firmware curve via powermode toggle (current {pm})"))
+    put(f"{LEGION}/powermode", "3" if pm != "3" else "2")
+    time.sleep(2)
+    put(f"{LEGION}/powermode", pm)
+    time.sleep(1)
+    print(f"  {G('restored')}\n")
+    cmd_show()
+
+
+def main():
+    if len(sys.argv) < 2:
+        print(USAGE)
+        return 1
+    v, rest = sys.argv[1], sys.argv[2:]
+    if v == "show":
+        return cmd_show()
+    if v == "apply":
+        return cmd_apply(rest)
+    if v == "presets":
+        return cmd_presets()
+    if v == "stock":
+        return cmd_stock()
+    print(USAGE)
+    return 1
+
+
+if __name__ == "__main__":
+    sys.exit(main() or 0)
