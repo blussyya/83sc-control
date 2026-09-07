@@ -1,0 +1,409 @@
+import { Button, ComboBox, LineEdit, Slider, GroupBox, VerticalBox, HorizontalBox,
+         ListView, CheckBox, TabWidget, ScrollView } from "std-widgets.slint";
+
+export struct CurvePoint {
+    temp: int,
+    rpm: int,
+}
+
+export struct Stats {
+    cpu-temp: int,
+    gpu-temp: int,
+    fan-rpm: int,
+    fan-max: int,
+    cpu-mhz: int,
+    gpu-watts: float,
+    pl1: int,
+    pl2: int,
+    tau: int,
+    powermode: int,
+    mode-name: string,
+    prochot: int,
+}
+
+component Stat inherits Rectangle {
+    in property <string> label;
+    in property <string> value;
+    in property <color> tint: #8ab4f8;
+    background: #1e1f22;
+    border-radius: 6px;
+    min-width: 104px;
+    height: 54px;
+    VerticalLayout {
+        padding: 8px;
+        spacing: 2px;
+        Text { text: label; font-size: 10px; color: #9aa0a6; }
+        Text { text: value; font-size: 17px; font-weight: 700; color: tint; }
+    }
+}
+
+export component MainWindow inherits Window {
+    title: "83SC Control";
+    min-width: 900px;
+    min-height: 620px;
+    background: #141517;
+
+    in property <Stats> stats;
+    in property <[CurvePoint]> curve;
+    in property <[string]> profile-names;
+    in property <string> status;
+    in property <bool> status-error: false;
+    in property <int> gpu-ctgp;
+    in property <int> gpu-ppab;
+    in property <bool> hw-ok: true;
+
+    in-out property <int> sel-profile: 0;
+    in-out property <int> edit-pl1;
+    in-out property <int> edit-pl2;
+    in-out property <int> edit-tau;
+    in-out property <int> edit-ctgp;
+    in-out property <int> edit-ppab;
+    in-out property <int> bind-mode: 0;
+
+    callback apply-curve();
+    callback apply-power();
+    callback apply-gpu();
+    callback load-profile(int);
+    callback apply-profile(int);
+    callback save-profile(string);
+    callback delete-profile(int);
+    callback set-powermode(int);
+    callback restore-stock();
+    callback bind-profile(int, int);
+    callback point-changed(int, int, int);
+
+    VerticalBox {
+        padding: 14px;
+        spacing: 12px;
+
+        // live telemetry strip
+        HorizontalLayout {
+            spacing: 8px;
+            Stat { label: "CPU"; value: stats.cpu-temp + "°C";
+                   tint: stats.cpu-temp >= 90 ? #f28b82 : stats.cpu-temp >= 80 ? #fdd663 : #81c995; }
+            Stat { label: "CPU CLOCK"; value: stats.cpu-mhz + " MHz"; }
+            Stat { label: "FAN"; value: stats.fan-rpm + " rpm"; tint: #c58af9; }
+            Stat { label: "GPU"; value: stats.gpu-temp + "°C"; tint: #81c995; }
+            Stat { label: "GPU POWER"; value: round(stats.gpu-watts) + " W"; tint: #c58af9; }
+            Stat { label: "POWER LIMIT"; value: stats.pl1 + " / " + stats.pl2 + " W"; }
+            Stat { label: "PROCHOT"; value: stats.prochot;
+                   tint: stats.prochot > 0 ? #f28b82 : #81c995; }
+            Stat { label: "MODE"; value: stats.mode-name; tint: #fdd663; }
+        }
+
+        if !hw-ok: Rectangle {
+            background: #3a2020;
+            border-radius: 6px;
+            height: 40px;
+            Text {
+                text: "legion_laptop not loaded — nothing to control. Load it, then restart this app.";
+                color: #f28b82;
+            }
+        }
+
+        HorizontalLayout {
+            spacing: 12px;
+
+            // profiles
+            Rectangle {
+                width: 210px;
+                background: #1a1b1e;
+                border-radius: 8px;
+                VerticalLayout {
+                    padding: 10px;
+                    spacing: 8px;
+                    Text { text: "Profiles"; font-size: 13px; font-weight: 700; color: #e8eaed; }
+                    ListView {
+                        for name[i] in profile-names: Rectangle {
+                            height: 32px;
+                            background: i == sel-profile ? #2d4263 : transparent;
+                            border-radius: 5px;
+                            TouchArea {
+                                clicked => { sel-profile = i; load-profile(i); }
+                            }
+                            HorizontalLayout {
+                                padding-left: 8px;
+                                Text {
+                                    text: name;
+                                    color: #e8eaed;
+                                    vertical-alignment: center;
+                                    font-size: 12px;
+                                }
+                            }
+                        }
+                    }
+                    Button {
+                        text: "Apply profile";
+                        primary: true;
+                        enabled: hw-ok;
+                        clicked => { apply-profile(sel-profile); }
+                    }
+                    HorizontalLayout {
+                        spacing: 6px;
+                        new-name := LineEdit {
+                            placeholder-text: "save as…";
+                            font-size: 12px;
+                        }
+                        Button {
+                            text: "Save";
+                            clicked => {
+                                if (new-name.text != "") {
+                                    save-profile(new-name.text);
+                                    new-name.text = "";
+                                }
+                            }
+                        }
+                    }
+                    Button {
+                        text: "Delete selected";
+                        clicked => { delete-profile(sel-profile); }
+                    }
+
+                    Rectangle { height: 1px; background: #2a2b2e; }
+
+                    Text { text: "Run this profile in mode"; font-size: 11px; color: #9aa0a6; }
+                    mode-box := ComboBox {
+                        model: ["(no binding)", "Quiet", "Balanced", "Performance", "Extreme", "Custom"];
+                        current-index: bind-mode;
+                        selected => { bind-mode = self.current-index; }
+                    }
+                    Button {
+                        text: "Bind";
+                        clicked => { bind-profile(sel-profile, mode-box.current-index); }
+                    }
+                }
+            }
+
+            // main pane
+            TabWidget {
+                Tab {
+                    title: "Fan curve";
+                    VerticalBox {
+                        padding: 12px;
+                        spacing: 10px;
+
+                        // bar graph
+                        Rectangle {
+                            height: 150px;
+                            background: #1a1b1e;
+                            border-radius: 8px;
+                            HorizontalLayout {
+                                padding: 10px;
+                                spacing: 4px;
+                                for p[i] in curve: Rectangle {
+                                    VerticalLayout {
+                                        spacing: 3px;
+                                        Rectangle { }  // spacer pushes the bar down
+                                        Rectangle {
+                                            height: 92px * (p.rpm / max(stats.fan-max, 1));
+                                            background: @linear-gradient(180deg, #8ab4f8 0%, #4a6fa5 100%);
+                                            border-radius: 3px;
+                                        }
+                                        Text {
+                                            text: p.temp + "°";
+                                            font-size: 9px;
+                                            color: #9aa0a6;
+                                            horizontal-alignment: center;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        Text {
+                            text: "Trip temperature and fan speed at each of the 10 hardware points. "
+                                + "Temperatures must increase down the list.";
+                            font-size: 11px;
+                            color: #9aa0a6;
+                            wrap: word-wrap;
+                        }
+
+                        ScrollView {
+                            VerticalLayout {
+                                spacing: 4px;
+                                for p[i] in curve: HorizontalLayout {
+                                    spacing: 8px;
+                                    height: 32px;
+                                    Text {
+                                        text: (i + 1) + ".";
+                                        width: 22px;
+                                        color: #9aa0a6;
+                                        vertical-alignment: center;
+                                        font-size: 11px;
+                                    }
+                                    Text {
+                                        text: "temp";
+                                        width: 34px;
+                                        color: #9aa0a6;
+                                        vertical-alignment: center;
+                                        font-size: 11px;
+                                    }
+                                    t-edit := LineEdit {
+                                        width: 62px;
+                                        text: p.temp;
+                                        font-size: 12px;
+                                        edited => { point-changed(i, t-edit.text.to-float(), p.rpm); }
+                                    }
+                                    Text {
+                                        text: "°C     rpm";
+                                        width: 66px;
+                                        color: #9aa0a6;
+                                        vertical-alignment: center;
+                                        font-size: 11px;
+                                    }
+                                    r-edit := LineEdit {
+                                        width: 74px;
+                                        text: p.rpm;
+                                        font-size: 12px;
+                                        edited => { point-changed(i, p.temp, r-edit.text.to-float()); }
+                                    }
+                                    Slider {
+                                        minimum: 0;
+                                        maximum: stats.fan-max;
+                                        value: p.rpm;
+                                        changed(v) => { point-changed(i, p.temp, v); }
+                                    }
+                                }
+                            }
+                        }
+
+                        HorizontalLayout {
+                            spacing: 8px;
+                            Button {
+                                text: "Apply fan curve";
+                                primary: true;
+                                enabled: hw-ok;
+                                clicked => { apply-curve(); }
+                            }
+                            Button {
+                                text: "Reload firmware curve";
+                                clicked => { restore-stock(); }
+                            }
+                        }
+                    }
+                }
+
+                Tab {
+                    title: "Power";
+                    VerticalBox {
+                        padding: 12px;
+                        spacing: 14px;
+
+                        GroupBox {
+                            title: "CPU";
+                            VerticalLayout {
+                                spacing: 10px;
+                                HorizontalLayout {
+                                    spacing: 10px;
+                                    Text { text: "Sustained (PL1)"; width: 150px; color: #e8eaed;
+                                           vertical-alignment: center; font-size: 12px; }
+                                    Slider {
+                                        minimum: 15; maximum: 75; value: edit-pl1;
+                                        changed(v) => { edit-pl1 = round(v); }
+                                    }
+                                    Text { text: edit-pl1 + " W"; width: 54px; color: #8ab4f8;
+                                           vertical-alignment: center; font-weight: 700; }
+                                }
+                                HorizontalLayout {
+                                    spacing: 10px;
+                                    Text { text: "Burst (PL2)"; width: 150px; color: #e8eaed;
+                                           vertical-alignment: center; font-size: 12px; }
+                                    Slider {
+                                        minimum: 20; maximum: 140; value: edit-pl2;
+                                        changed(v) => { edit-pl2 = round(v); }
+                                    }
+                                    Text { text: edit-pl2 + " W"; width: 54px; color: #8ab4f8;
+                                           vertical-alignment: center; font-weight: 700; }
+                                }
+                                HorizontalLayout {
+                                    spacing: 10px;
+                                    Text { text: "PL1 window"; width: 150px; color: #e8eaed;
+                                           vertical-alignment: center; font-size: 12px; }
+                                    Slider {
+                                        minimum: 1; maximum: 60; value: edit-tau;
+                                        changed(v) => { edit-tau = round(v); }
+                                    }
+                                    Text { text: edit-tau + " s"; width: 54px; color: #8ab4f8;
+                                           vertical-alignment: center; font-weight: 700; }
+                                }
+                                Text {
+                                    text: "Stock is 55 W sustained with a 56 s window, which this chassis "
+                                        + "cannot cool. A shorter window makes the limit bite before the "
+                                        + "CPU reaches its thermal wall.";
+                                    font-size: 11px; color: #9aa0a6; wrap: word-wrap;
+                                }
+                                Button {
+                                    text: "Apply power limits";
+                                    primary: true;
+                                    enabled: hw-ok;
+                                    clicked => { apply-power(); }
+                                }
+                            }
+                        }
+
+                        GroupBox {
+                            title: "GPU";
+                            VerticalLayout {
+                                spacing: 10px;
+                                HorizontalLayout {
+                                    spacing: 10px;
+                                    Text { text: "cTGP"; width: 150px; color: #e8eaed;
+                                           vertical-alignment: center; font-size: 12px; }
+                                    Slider {
+                                        minimum: 0; maximum: 80; value: edit-ctgp;
+                                        changed(v) => { edit-ctgp = round(v); }
+                                    }
+                                    Text { text: edit-ctgp + " W"; width: 54px; color: #8ab4f8;
+                                           vertical-alignment: center; font-weight: 700; }
+                                }
+                                HorizontalLayout {
+                                    spacing: 10px;
+                                    Text { text: "Dynamic boost (PPAB)"; width: 150px; color: #e8eaed;
+                                           vertical-alignment: center; font-size: 12px; }
+                                    Slider {
+                                        minimum: 0; maximum: 30; value: edit-ppab;
+                                        changed(v) => { edit-ppab = round(v); }
+                                    }
+                                    Text { text: edit-ppab + " W"; width: 54px; color: #8ab4f8;
+                                           vertical-alignment: center; font-weight: 700; }
+                                }
+                                Text {
+                                    text: "The firmware clamps these to its own maximum. Total GPU budget "
+                                        + "is cTGP plus dynamic boost.";
+                                    font-size: 11px; color: #9aa0a6; wrap: word-wrap;
+                                }
+                                Button {
+                                    text: "Apply GPU limits";
+                                    enabled: hw-ok;
+                                    clicked => { apply-gpu(); }
+                                }
+                            }
+                        }
+
+                        GroupBox {
+                            title: "Power mode";
+                            HorizontalLayout {
+                                spacing: 8px;
+                                Button { text: "Quiet"; clicked => { set-powermode(1); } }
+                                Button { text: "Balanced"; clicked => { set-powermode(2); } }
+                                Button { text: "Performance"; clicked => { set-powermode(3); } }
+                                Button { text: "Extreme"; clicked => { set-powermode(224); } }
+                                Button { text: "Custom"; clicked => { set-powermode(255); } }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        Rectangle {
+            height: 26px;
+            Text {
+                text: status;
+                color: status-error ? #f28b82 : #9aa0a6;
+                font-size: 11px;
+                vertical-alignment: center;
+            }
+        }
+    }
+}

@@ -1,0 +1,23 @@
+[package]
+# cargo rejects names starting with a digit, so the crate is legion83-*
+# while the user-facing app is still "83SC Control"
+name = "legion83-control-gui"
+version = "0.1.0"
+edition = "2021"
+description = "Fan curve and power limit control for the Lenovo LOQ Essential 15IRX11"
+
+[[bin]]
+name = "legion83-gui"
+path = "src/main.rs"
+
+[dependencies]
+slint = { version = "1.17", default-features = false, features = ["backend-winit", "renderer-skia", "compat-1-2"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[build-dependencies]
+slint-build = "1.17"
+
+[profile.release]
+opt-level = 2
+strip = true

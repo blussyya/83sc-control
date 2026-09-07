@@ -113,7 +113,7 @@ Arg1 == 0x06  ->  SFAN (Arg2)           set
 | CPU + GPU combined, 240 s | **0 PROCHOT events**, CPU 81 °C peak / 73 °C avg, GPU 40 W sustained |
 | Fan curve after `EC3` fix | real trip temps + rpm, matching firmware `FNT0` exactly |
 | `fan_fullspeed` guard | `EBUSY` in powermode 3, succeeds in 255 |
-| Real CS2 match | **Not yet run** |
+| **Real CS2 match** | **frametime 37.5 -> 7.5 ms avg, p99 210 -> 20 ms, stutters >100 ms 48 -> 0, floor samples 18.6% -> 0%, peak CPU 100 -> 87 C, avg FPS 26 -> 133, 1% low 4.5 -> 41** |
 
 Note: an earlier combined run measured nothing because `stress-ng --gpu` never
 engaged the dGPU (3.5 W = idle, no display context). The 240 s result above used
@@ -138,3 +138,6 @@ a CUDA load reaching a real 40 W.
 1. Reach the 5400 rpm ceiling declared in `FTTD` (observed rarely under Windows).
 2. Per-model pwm↔rpm scaling — `MAX_RPM` 10000 skews reported duty by ~2×.
 3. Tune PL1 between 45 W and 55 W; 45 W is proven, not optimised.
+4. Separate, non-thermal stutter on first launch (shader compilation / map load):
+   one run showed 12 stutters over 200 ms at 79 C and 44 W with zero floor
+   samples, so it is not a power or cooling problem.

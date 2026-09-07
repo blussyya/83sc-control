@@ -52,9 +52,61 @@ put() {
     return 0
 }
 
+CURVE_CONF=/etc/83sc-control/curve.conf
+
+find_hwmon() {
+    local h
+    for h in /sys/class/hwmon/hwmon*; do
+        [[ "$(cat "$h/name" 2>/dev/null)" == legion_hwmon ]] && { echo "$h"; return 0; }
+    done
+    return 1
+}
+
+# The EC reloads its fan table on every power mode change, so the saved curve
+# has to be written after the mode is set, not before.
+apply_curve() {
+    local h temp rpm mx pwm i
+    h=$(find_hwmon) || { fail "legion_hwmon not found, curve not applied"; return 1; }
+    mx=$(cat "$h/fan1_max" 2>/dev/null || echo 5400)
+    [[ $mx -gt 0 ]] || mx=5400
+
+    mapfile -t lines < <(grep -vE '^\s*(#|$)' "$CURVE_CONF")
+    [[ ${#lines[@]} -eq 10 ]] || { fail "curve.conf needs exactly 10 points, got ${#lines[@]}"; return 1; }
+
+    # Curve writes are silently ignored outside custom powermode (255), so a
+    # profile that selects any other mode cannot also carry a custom curve.
+    if [[ "$(cat "$LEGION/powermode" 2>/dev/null)" != "255" ]]; then
+        log "curve.conf present, forcing powermode 255 (writes are ignored otherwise)"
+        put "$LEGION/powermode" 255 "powermode" || rc=1
+        sleep 1
+    fi
+
+    # fan_fullspeed pins the fan to maximum and overrides the curve entirely.
+    put "$LEGION/fan_fullspeed" 0 "fan_fullspeed" || true
+    [[ -e $h/minifancurve ]] && put "$h/minifancurve" 0 "minifancurve" || true
+
+    # Highest point first: trip temperatures must increase monotonically, and
+    # writing low-to-high can transiently invert a pair and get rejected.
+    for (( i=9; i>=0; i-- )); do
+        read -r temp rpm <<< "${lines[$i]}"
+        pwm=$(( (rpm * 255 + mx / 2) / mx ))
+        (( pwm > 255 )) && pwm=255
+        (( pwm < 0 )) && pwm=0
+        put "$h/pwm1_auto_point$((i+1))_temp" "$temp" "curve[$((i+1))].temp" || rc=1
+        put "$h/pwm1_auto_point$((i+1))_temp_hyst" "$(( temp > 5 ? temp - 5 : 0 ))" "curve[$((i+1))].hyst" || true
+        put "$h/pwm1_auto_point$((i+1))_pwm" "$pwm" "curve[$((i+1))].pwm" || rc=1
+    done
+    log "applied saved fan curve from $CURVE_CONF"
+}
+
 if [[ -e $LEGION/powermode ]]; then
     put "$LEGION/powermode" "$POWERMODE" "powermode" || rc=1
-    put "$LEGION/fan_fullspeed" "$FAN_FULLSPEED" "fan_fullspeed" || rc=1
+    if [[ -r $CURVE_CONF ]]; then
+        sleep 1
+        apply_curve || rc=1
+    else
+        put "$LEGION/fan_fullspeed" "$FAN_FULLSPEED" "fan_fullspeed" || rc=1
+    fi
 else
     fail "legion_laptop did not appear within ${WAIT_SECONDS}s; powermode and fan control NOT applied"
     rc=1

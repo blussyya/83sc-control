@@ -15,6 +15,7 @@ USAGE = """
   83sc-fan apply <preset>     write a curve
   83sc-fan presets            list presets
   83sc-fan stock              reload the firmware curve (powermode toggle)
+  83sc-fan save-boot          persist the live curve so it survives reboot
 
 The stock curve sits at 0 rpm until 75C then jumps straight to 3400 rpm, which
 is why the fan is silent and then suddenly loud. These presets ramp earlier and
@@ -118,6 +119,15 @@ def cmd_apply(argv):
 
     print(f"\n  applying {B(name)}\n")
 
+    # Curve writes are silently rejected outside custom powermode (255): the
+    # write returns success and the value simply does not change. Verified by
+    # writing the same point in mode 3 (ignored) and mode 255 (accepted).
+    pm = read(f"{LEGION}/powermode")
+    if pm != "255":
+        print(D(f"  switching powermode {pm} -> 255 (curve writes are ignored otherwise)"))
+        put(f"{LEGION}/powermode", 255)
+        time.sleep(1.5)
+
     # fan_fullspeed overrides the curve, and minifancurve permits a full stop.
     # Both must be off or the curve below is cosmetic.
     if read(f"{LEGION}/fan_fullspeed") != "0":
@@ -168,6 +178,33 @@ def cmd_stock():
     cmd_show()
 
 
+BOOT_CONF = "/etc/83sc-control/curve.conf"
+
+
+def cmd_save_boot():
+    h = hwmon()
+    mx = max_rpm(h)
+    lines = ["# written by 83sc-fan save-boot", "# temp_C  rpm"]
+    for p in range(1, 11):
+        t = num(read(f"{h}/pwm1_auto_point{p}_temp"))
+        r = pwm_to_rpm(num(read(f"{h}/pwm1_auto_point{p}_pwm")), mx)
+        lines.append(f"{t} {r}")
+    body = "\n".join(lines) + "\n"
+
+    try:
+        os.makedirs(os.path.dirname(BOOT_CONF), exist_ok=True)
+        with open(BOOT_CONF, "w") as f:
+            f.write(body)
+    except PermissionError:
+        print(f"\n  {Y('needs root')} - run:\n")
+        print(f"    sudo mkdir -p {os.path.dirname(BOOT_CONF)} && sudo tee {BOOT_CONF} >/dev/null <<'EOF'")
+        print(body + "EOF\n")
+        return 1
+    print(f"\n  {G('saved')} -> {BOOT_CONF}")
+    print(D("  83sc-thermal.service will restore this curve at boot\n"))
+    return 0
+
+
 def main():
     if len(sys.argv) < 2:
         print(USAGE)
@@ -175,6 +212,8 @@ def main():
     v, rest = sys.argv[1], sys.argv[2:]
     if v == "show":
         return cmd_show()
+    if v == "save-boot":
+        return cmd_save_boot()
     if v == "apply":
         return cmd_apply(rest)
     if v == "presets":

@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=83SC Control
+GenericName=Fan and Power Control
+Comment=Fan curve, CPU and GPU power limits for the Lenovo LOQ Essential 15IRX11
+Exec=/usr/local/bin/legion83-gui
+Icon=cpu
+Terminal=false
+Categories=System;Settings;HardwareSettings;
+Keywords=fan;curve;thermal;power;tdp;cpu;gpu;legion;lenovo;
+StartupNotify=true
