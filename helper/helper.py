@@ -443,6 +443,25 @@ def cmd_gpu_hotspot(argv):
     out["plausible"] = 15.0 <= celsius <= 125.0
     print(json.dumps(out))
 
+def cmd_dump_legion(argv):
+    allowed = {"ecmemory", "ecmemoryram", "fancurve"}
+    name = argv[0] if argv else "ecmemory"
+    if name not in allowed:
+        die(f"file must be one of: {', '.join(sorted(allowed))}")
+    path = f"/sys/kernel/debug/legion/{name}"
+    if not os.path.exists(path):
+        die(f"{path} not present (is legion_laptop loaded?)")
+    try:
+        with open(path, "rb") as f:
+            data = f.read()
+    except OSError as e:
+        die(f"read failed: {e}")
+    if name == "fancurve":
+        print(json.dumps({"file": name, "text": data.decode(errors="replace")}))
+    else:
+        print(json.dumps({"file": name, "size": len(data), "hex": data.hex()}))
+
+
 def cmd_modprobe(argv):
     if not argv:
         die("usage: modprobe <module> [args...]")
@@ -490,6 +509,7 @@ def main():
         "set": lambda: cmd_set(rest), "fan-curve": lambda: cmd_fancurve(rest),
         "msr": lambda: cmd_msr(rest), "msr-write": lambda: cmd_msr_write(rest),
         "dump-ec": lambda: cmd_dump_ec(), "ec-write": lambda: cmd_ec_write(rest),
+        "dump-legion": lambda: cmd_dump_legion(rest),
         "gpu-hotspot": lambda: cmd_gpu_hotspot(rest),
         "acpidump": lambda: cmd_acpidump(rest), "modprobe": lambda: cmd_modprobe(rest),
     }

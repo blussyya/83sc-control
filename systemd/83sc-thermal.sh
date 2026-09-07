@@ -23,9 +23,14 @@ fail() { echo "83sc-thermal: $*" >&2; }
 
 rc=0
 
-if [[ ! -d $LEGION ]]; then
-    log "legion platform device absent, loading legion_laptop"
-    modprobe legion_laptop 2>/dev/null || modprobe legion_laptop force=1 2>/dev/null || true
+if [[ ! -e $LEGION/powermode ]]; then
+    log "legion_laptop not bound, loading it"
+    if ! out=$(modprobe legion_laptop 2>&1); then
+        log "modprobe legion_laptop failed: ${out:-no output}, retrying with force=1"
+        if ! out=$(modprobe legion_laptop force=1 2>&1); then
+            fail "modprobe legion_laptop force=1 failed: ${out:-no output}"
+        fi
+    fi
 fi
 
 waited=0
