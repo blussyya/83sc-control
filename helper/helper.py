@@ -100,6 +100,8 @@ NAMED = {
     "fn_lock":        f"{LEGION}/fn_lock",
     "touchpad":       f"{LEGION}/touchpad",
     "winkey":         f"{LEGION}/winkey",
+    "flip_to_start":  f"{LEGION}/flip_to_start",
+    "kbd_backlight":  "/sys/class/leds/platform::kbd_backlight/brightness",
     "battery_conserv": f"{LEGION}/battery_conservation",
     "rapid_charge":   f"{LEGION}/rapidcharge",
     "overdrive":      f"{LEGION}/overdrive",
@@ -539,6 +541,23 @@ def cmd_boot_save(argv):
                       ("TAU_US", "constraint_0_time_window_us")):
         put(key, read(f"{RAPL}/{node}"))
     put("MAX_PERF_PCT", read(f"{PSTATE}/max_perf_pct"))
+
+    for key, node in (("CPU_TEMP_LIMIT", "cpu_temperature_limit"),
+                      ("GPU_TEMP_LIMIT", "gpu_temperature_limit"),
+                      ("CROSS_LOADING", "cpu_cross_loading_powerlimit"),
+                      ("EC_TAU", "cpu_l1_tau"),
+                      ("GPU_BOOST", "gpu_oc"),
+                      ("GPU_OFFSET", "gpu_power_target_offset"),
+                      ("PL_COUPLING", "cpu_pl_coupling"),
+                      ("CONSERVATION", "battery_conservation"),
+                      ("RAPID_CHARGE", "rapidcharge"),
+                      ("FN_LOCK", "fn_lock"),
+                      ("WINKEY", "winkey"),
+                      ("TOUCHPAD", "touchpad"),
+                      ("FLIP_TO_START", "flip_to_start"),
+                      ("OVERDRIVE", "overdrive")):
+        put(key, read(f"{LEGION}/{node}"))
+    put("KBD_BACKLIGHT", read("/sys/class/leds/platform::kbd_backlight/brightness"))
 
     uv = 0
     try:

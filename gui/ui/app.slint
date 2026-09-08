@@ -24,6 +24,64 @@ export struct Stats {
     on-battery: bool,
 }
 
+export struct Extras {
+    bat-capacity: int,
+    bat-cycles: int,
+    bat-health: int,
+    bat-volts: float,
+    bat-watts: float,
+    bat-status: string,
+    bat-model: string,
+    kbd-max: int,
+    refresh-hz: int,
+    gpu-name: string,
+    gpu-pl-max: int,
+    igpu-mode: int,
+}
+
+// Most of the added controls are "label, slider, value" so they share one row
+// component. It never writes to its own value: the parent owns the property and
+// feeds it back in, which keeps the Rust side the single source of truth.
+component SliderRow inherits HorizontalLayout {
+    in property <string> label;
+    in property <float> minimum;
+    in property <float> maximum;
+    in property <int> step: 1;
+    in property <int> value;
+    in property <string> unit;
+    in property <bool> enabled: true;
+    callback changed(float);
+    spacing: 10px;
+    Text { text: root.label; width: 158px; color: #e8eaed;
+           vertical-alignment: center; font-size: 12px; }
+    Slider {
+        minimum: root.minimum;
+        maximum: root.maximum;
+        value: root.value;
+        enabled: root.enabled;
+        changed(v) => { root.changed(round(v / root.step) * root.step); }
+    }
+    Text { text: root.value + " " + root.unit; width: 62px; color: #8ab4f8;
+           vertical-alignment: center; font-weight: 700; font-size: 12px; }
+}
+
+component Note inherits Text {
+    font-size: 11px;
+    color: #9aa0a6;
+    wrap: word-wrap;
+}
+
+component Field inherits HorizontalLayout {
+    in property <string> label;
+    in property <string> value;
+    spacing: 8px;
+    height: 22px;
+    Text { text: root.label; width: 150px; color: #9aa0a6;
+           font-size: 11px; vertical-alignment: center; }
+    Text { text: root.value; color: #e8eaed; font-size: 12px;
+           font-weight: 600; vertical-alignment: center; }
+}
+
 component Stat inherits Rectangle {
     in property <string> label;
     in property <string> value;
@@ -56,6 +114,9 @@ export component MainWindow inherits Window {
     in property <int> gpu-ctgp;
     in property <int> gpu-ppab;
     in property <bool> hw-ok: true;
+    in property <Extras> extras;
+    in property <[string]> refresh-options;
+    in property <[string]> gpu-clients;
 
     in-out property <int> sel-profile: 0;
     in-out property <int> edit-pl1;
@@ -68,6 +129,24 @@ export component MainWindow inherits Window {
     in-out property <int> edit-maxperf: 100;
     in-out property <bool> persist;
     in-out property <int> bind-power: 0;
+
+    in-out property <int> edit-kbd;
+    in-out property <int> edit-refresh-idx;
+    in-out property <int> edit-cpu-temp;
+    in-out property <int> edit-gpu-temp;
+    in-out property <int> edit-crossload;
+    in-out property <int> edit-ec-tau;
+    in-out property <int> edit-gpu-boost;
+    in-out property <int> edit-gpu-offset;
+
+    in-out property <bool> tog-conservation;
+    in-out property <bool> tog-rapid;
+    in-out property <bool> tog-fnlock;
+    in-out property <bool> tog-winkey;
+    in-out property <bool> tog-touchpad;
+    in-out property <bool> tog-flip;
+    in-out property <bool> tog-overdrive;
+    in-out property <bool> tog-plcoupling;
 
     callback apply-curve();
     callback apply-power();
@@ -85,6 +164,12 @@ export component MainWindow inherits Window {
     callback set-persist(bool);
     callback bind-power-source(int, int);
     callback update-profile(int);
+    callback set-flag(string, bool);
+    callback set-charge-mode(bool, bool);
+    callback apply-kbd(int);
+    callback apply-refresh(int);
+    callback apply-ec-limits();
+    callback apply-gpu-extra();
 
     VerticalBox {
         padding: 14px;
@@ -401,45 +486,6 @@ export component MainWindow inherits Window {
                         }
 
                         GroupBox {
-                            title: "GPU";
-                            VerticalLayout {
-                                spacing: 10px;
-                                HorizontalLayout {
-                                    spacing: 10px;
-                                    Text { text: "cTGP"; width: 150px; color: #e8eaed;
-                                           vertical-alignment: center; font-size: 12px; }
-                                    Slider {
-                                        minimum: 0; maximum: 80; value: edit-ctgp;
-                                        changed(v) => { edit-ctgp = round(v); }
-                                    }
-                                    Text { text: edit-ctgp + " W"; width: 54px; color: #8ab4f8;
-                                           vertical-alignment: center; font-weight: 700; }
-                                }
-                                HorizontalLayout {
-                                    spacing: 10px;
-                                    Text { text: "Dynamic boost (PPAB)"; width: 150px; color: #e8eaed;
-                                           vertical-alignment: center; font-size: 12px; }
-                                    Slider {
-                                        minimum: 0; maximum: 30; value: edit-ppab;
-                                        changed(v) => { edit-ppab = round(v); }
-                                    }
-                                    Text { text: edit-ppab + " W"; width: 54px; color: #8ab4f8;
-                                           vertical-alignment: center; font-weight: 700; }
-                                }
-                                Text {
-                                    text: "The firmware clamps these to its own maximum. Total GPU budget "
-                                        + "is cTGP plus dynamic boost.";
-                                    font-size: 11px; color: #9aa0a6; wrap: word-wrap;
-                                }
-                                Button {
-                                    text: "Apply GPU limits";
-                                    enabled: hw-ok;
-                                    clicked => { apply-gpu(); }
-                                }
-                            }
-                        }
-
-                        GroupBox {
                             title: "Undervolt";
                             VerticalLayout {
                                 spacing: 10px;
@@ -504,6 +550,43 @@ export component MainWindow inherits Window {
                         }
 
                         GroupBox {
+                            title: "Embedded controller";
+                            VerticalLayout {
+                                spacing: 10px;
+                                SliderRow {
+                                    label: "CPU throttle point"; minimum: 70; maximum: 100;
+                                    unit: "°C"; value: edit-cpu-temp;
+                                    changed(v) => { edit-cpu-temp = v; }
+                                }
+                                SliderRow {
+                                    label: "Cross-loading limit"; minimum: 10; maximum: 65;
+                                    unit: "W"; value: edit-crossload;
+                                    changed(v) => { edit-crossload = v; }
+                                }
+                                SliderRow {
+                                    label: "EC power window"; minimum: 4; maximum: 120; step: 4;
+                                    unit: "s"; value: edit-ec-tau;
+                                    changed(v) => { edit-ec-tau = v; }
+                                }
+                                CheckBox {
+                                    text: "Couple PL1 and PL2";
+                                    checked <=> tog-plcoupling;
+                                    toggled => { set-flag("cpu_pl_coupling", self.checked); }
+                                }
+                                Note {
+                                    text: "These are the firmware's own limits, separate from the RAPL "
+                                        + "sliders above. Cross-loading is the CPU's share when the GPU is "
+                                        + "also loaded. The EC window quantises to multiples of 4 s.";
+                                }
+                                Button {
+                                    text: "Apply EC limits";
+                                    enabled: hw-ok;
+                                    clicked => { apply-ec-limits(); }
+                                }
+                            }
+                        }
+
+                        GroupBox {
                             title: "Power mode";
                             HorizontalLayout {
                                 spacing: 8px;
@@ -512,6 +595,259 @@ export component MainWindow inherits Window {
                                 Button { text: "Performance"; clicked => { set-powermode(3); } }
                                 Button { text: "Extreme"; clicked => { set-powermode(224); } }
                                 Button { text: "Custom"; clicked => { set-powermode(255); } }
+                            }
+                        }
+                        Rectangle { min-height: 8px; }
+                    }
+                    }
+                }
+
+                Tab {
+                    title: "GPU";
+                    ScrollView {
+                    VerticalLayout {
+                        padding: 12px;
+                        spacing: 14px;
+
+                        GroupBox {
+                            title: extras.gpu-name == "" ? "GPU" : extras.gpu-name;
+                            VerticalLayout {
+                                spacing: 10px;
+                                SliderRow {
+                                    label: "cTGP"; minimum: 0; maximum: 80; unit: "W";
+                                    value: edit-ctgp; changed(v) => { edit-ctgp = v; }
+                                }
+                                SliderRow {
+                                    label: "Dynamic boost (PPAB)"; minimum: 0; maximum: 30; unit: "W";
+                                    value: edit-ppab; changed(v) => { edit-ppab = v; }
+                                }
+                                Note {
+                                    text: "The firmware clamps these to its own maximum. Total budget is "
+                                        + "cTGP plus dynamic boost, and the card's own ceiling is "
+                                        + extras.gpu-pl-max + " W.";
+                                }
+                                Button {
+                                    text: "Apply GPU limits";
+                                    primary: true;
+                                    enabled: hw-ok;
+                                    clicked => { apply-gpu(); }
+                                }
+                            }
+                        }
+
+                        GroupBox {
+                            title: "Firmware GPU limits";
+                            VerticalLayout {
+                                spacing: 10px;
+                                SliderRow {
+                                    label: "GPU throttle point"; minimum: 70; maximum: 95;
+                                    unit: "°C"; value: edit-gpu-temp;
+                                    changed(v) => { edit-gpu-temp = v; }
+                                }
+                                SliderRow {
+                                    label: "Power boost"; minimum: 0; maximum: 25; unit: "W";
+                                    value: edit-gpu-boost; changed(v) => { edit-gpu-boost = v; }
+                                }
+                                SliderRow {
+                                    label: "AC target offset"; minimum: 0; maximum: 30; unit: "W";
+                                    value: edit-gpu-offset; changed(v) => { edit-gpu-offset = v; }
+                                }
+                                Note {
+                                    text: "The sysfs node behind Power boost is named gpu_oc, but on this "
+                                        + "firmware it carries watts rather than an on/off switch. AC target "
+                                        + "offset raises the board's power target above its baseline while "
+                                        + "the charger is connected.";
+                                }
+                                Button {
+                                    text: "Apply firmware GPU limits";
+                                    enabled: hw-ok;
+                                    clicked => { apply-gpu-extra(); }
+                                }
+                            }
+                        }
+
+                        GroupBox {
+                            title: "Discrete GPU";
+                            VerticalLayout {
+                                spacing: 6px;
+                                Field { label: "Graphics mode";
+                                        value: extras.igpu-mode == 0 ? "hybrid (dGPU available)"
+                                                                     : "integrated only"; }
+                                Field { label: "Holding it awake";
+                                        value: gpu-clients.length == 0 ? "nothing — asleep"
+                                                                       : gpu-clients.length + " client(s)"; }
+                                for c in gpu-clients: Text {
+                                    text: "   " + c;
+                                    font-size: 11px;
+                                    color: #c58af9;
+                                }
+                                Note {
+                                    text: "Switching to integrated-only is deliberately not offered here. "
+                                        + "On Windows the toolkit can do it live; on Linux the X or Wayland "
+                                        + "session is already bound to the card and the switch would take "
+                                        + "the desktop down with it. Use the BIOS if you want it off.";
+                                }
+                            }
+                        }
+                        Rectangle { min-height: 8px; }
+                    }
+                    }
+                }
+
+                Tab {
+                    title: "Battery";
+                    ScrollView {
+                    VerticalLayout {
+                        padding: 12px;
+                        spacing: 14px;
+
+                        GroupBox {
+                            title: "Charging";
+                            VerticalLayout {
+                                spacing: 8px;
+                                CheckBox {
+                                    text: "Conservation mode (stop charging near 60%)";
+                                    checked <=> tog-conservation;
+                                    toggled => {
+                                        if (self.checked) { tog-rapid = false; }
+                                        set-charge-mode(self.checked, tog-rapid);
+                                    }
+                                }
+                                CheckBox {
+                                    text: "Rapid charge";
+                                    checked <=> tog-rapid;
+                                    toggled => {
+                                        if (self.checked) { tog-conservation = false; }
+                                        set-charge-mode(tog-conservation, self.checked);
+                                    }
+                                }
+                                Note {
+                                    text: "The firmware treats these as mutually exclusive, so turning one "
+                                        + "on clears the other. Conservation mode is the one that matters "
+                                        + "for pack life if the machine lives on the charger.";
+                                }
+                            }
+                        }
+
+                        GroupBox {
+                            title: "Pack";
+                            VerticalLayout {
+                                spacing: 2px;
+                                Field { label: "Charge"; value: extras.bat-capacity + "%  ("
+                                                              + extras.bat-status + ")"; }
+                                Field { label: "Health";
+                                        value: extras.bat-health + "% of design capacity"; }
+                                Field { label: "Cycles"; value: extras.bat-cycles; }
+                                Field { label: "Voltage";
+                                        value: round(extras.bat-volts * 100) / 100 + " V"; }
+                                Field { label: extras.bat-status == "Discharging" ? "Draining at"
+                                                                                  : "Power flow";
+                                        value: round(extras.bat-watts * 10) / 10 + " W"; }
+                                Field { label: "Cell"; value: extras.bat-model; }
+                            }
+                        }
+                        Rectangle { min-height: 8px; }
+                    }
+                    }
+                }
+
+                Tab {
+                    title: "Keyboard";
+                    ScrollView {
+                    VerticalLayout {
+                        padding: 12px;
+                        spacing: 14px;
+
+                        GroupBox {
+                            title: "Backlight";
+                            VerticalLayout {
+                                spacing: 10px;
+                                SliderRow {
+                                    label: "Brightness"; minimum: 0; maximum: 2; unit: "of 2";
+                                    value: edit-kbd;
+                                    changed(v) => { edit-kbd = v; apply-kbd(v); }
+                                }
+                                Note {
+                                    text: "Three levels of white backlight — this chassis has no RGB zones, "
+                                        + "so there is nothing for a colour picker to drive.";
+                                }
+                            }
+                        }
+
+                        GroupBox {
+                            title: "Keys and touchpad";
+                            VerticalLayout {
+                                spacing: 8px;
+                                CheckBox {
+                                    text: "Fn lock (media keys need Fn held)";
+                                    checked <=> tog-fnlock;
+                                    toggled => { set-flag("fn_lock", self.checked); }
+                                }
+                                CheckBox {
+                                    text: "Windows key enabled";
+                                    checked <=> tog-winkey;
+                                    toggled => { set-flag("winkey", self.checked); }
+                                }
+                                CheckBox {
+                                    text: "Touchpad enabled";
+                                    checked <=> tog-touchpad;
+                                    toggled => { set-flag("touchpad", self.checked); }
+                                }
+                                CheckBox {
+                                    text: "Flip to start (open the lid to power on)";
+                                    checked <=> tog-flip;
+                                    toggled => { set-flag("flip_to_start", self.checked); }
+                                }
+                                Note {
+                                    text: "Turning the touchpad off takes effect immediately, so keep the "
+                                        + "keyboard within reach if you want it back.";
+                                }
+                            }
+                        }
+                        Rectangle { min-height: 8px; }
+                    }
+                    }
+                }
+
+                Tab {
+                    title: "Display";
+                    ScrollView {
+                    VerticalLayout {
+                        padding: 12px;
+                        spacing: 14px;
+
+                        GroupBox {
+                            title: "Panel";
+                            VerticalLayout {
+                                spacing: 10px;
+                                HorizontalLayout {
+                                    spacing: 10px;
+                                    Text { text: "Refresh rate"; width: 158px; color: #e8eaed;
+                                           vertical-alignment: center; font-size: 12px; }
+                                    hz-box := ComboBox {
+                                        model: refresh-options;
+                                        current-index: edit-refresh-idx;
+                                        selected => {
+                                            edit-refresh-idx = self.current-index;
+                                            apply-refresh(self.current-index);
+                                        }
+                                    }
+                                    Text { text: "now " + extras.refresh-hz + " Hz"; width: 76px;
+                                           color: #8ab4f8; vertical-alignment: center;
+                                           font-weight: 700; font-size: 12px; }
+                                }
+                                CheckBox {
+                                    text: "Overdrive (faster pixel response)";
+                                    checked <=> tog-overdrive;
+                                    toggled => { set-flag("overdrive", self.checked); }
+                                }
+                                Note {
+                                    text: "Refresh rate goes through the compositor, so it applies straight "
+                                        + "away and survives on its own. Dropping to 60 Hz is worth a few "
+                                        + "watts on battery. HDR and G-Sync are not offered because this "
+                                        + "panel reports itself incapable of the first and the firmware "
+                                        + "reports no support for the second.";
+                                }
                             }
                         }
                         Rectangle { min-height: 8px; }

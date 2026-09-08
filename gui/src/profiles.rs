@@ -30,11 +30,31 @@ pub struct Profile {
     /// KDE / power-profiles-daemon plan this profile follows, if any.
     #[serde(default)]
     pub power_plan: Option<String>,
+    /// EC throttle points. 0 leaves the firmware value alone.
+    #[serde(default)]
+    pub cpu_temp_limit: i32,
+    #[serde(default)]
+    pub gpu_temp_limit: i32,
+    /// GPU power boost and the on-AC target offset, both in watts.
+    #[serde(default)]
+    pub gpu_boost: i32,
+    #[serde(default)]
+    pub gpu_target_offset: i32,
+    /// Keyboard backlight level 0-2. -1 leaves it alone.
+    #[serde(default = "no_change")]
+    pub kbd_backlight: i32,
+    /// Panel refresh rate in Hz. 0 leaves it alone.
+    #[serde(default)]
+    pub refresh_hz: i32,
     pub builtin: bool,
 }
 
 fn full_perf() -> i32 {
     100
+}
+
+fn no_change() -> i32 {
+    -1
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, Default)]
@@ -62,7 +82,9 @@ pub fn builtins() -> Vec<Profile> {
                         (80, 2900), (84, 3400), (87, 3900), (90, 4300), (94, 4300)],
             pl1: 30, pl2: 55, tau: 8, powermode: 1,
             undervolt_mv: -100, max_perf_pct: 100,
-            fan_fullspeed: false, gpu_ctgp: 0, gpu_ppab: 0, power_plan: None, builtin: true,
+            fan_fullspeed: false, gpu_ctgp: 0, gpu_ppab: 0, power_plan: None,
+            cpu_temp_limit: 0, gpu_temp_limit: 0, gpu_boost: 0, gpu_target_offset: 0,
+            kbd_backlight: -1, refresh_hz: 0, builtin: true,
         },
         Profile {
             name: "Balanced".into(),
@@ -70,7 +92,9 @@ pub fn builtins() -> Vec<Profile> {
                         (75, 3100), (80, 3500), (85, 3900), (88, 4300), (92, 4300)],
             pl1: 40, pl2: 75, tau: 8, powermode: 2,
             undervolt_mv: -100, max_perf_pct: 100,
-            fan_fullspeed: false, gpu_ctgp: 0, gpu_ppab: 0, power_plan: None, builtin: true,
+            fan_fullspeed: false, gpu_ctgp: 0, gpu_ppab: 0, power_plan: None,
+            cpu_temp_limit: 0, gpu_temp_limit: 0, gpu_boost: 0, gpu_target_offset: 0,
+            kbd_backlight: -1, refresh_hz: 0, builtin: true,
         },
         Profile {
             name: "Gaming".into(),
@@ -78,7 +102,9 @@ pub fn builtins() -> Vec<Profile> {
                         (70, 3800), (75, 4100), (80, 4300), (85, 4300), (90, 4300)],
             pl1: 55, pl2: 90, tau: 8, powermode: 255,
             undervolt_mv: -100, max_perf_pct: 100,
-            fan_fullspeed: false, gpu_ctgp: 0, gpu_ppab: 0, power_plan: None, builtin: true,
+            fan_fullspeed: false, gpu_ctgp: 0, gpu_ppab: 0, power_plan: None,
+            cpu_temp_limit: 0, gpu_temp_limit: 0, gpu_boost: 0, gpu_target_offset: 0,
+            kbd_backlight: -1, refresh_hz: 144, builtin: true,
         },
         Profile {
             name: "Max cooling".into(),
@@ -86,7 +112,9 @@ pub fn builtins() -> Vec<Profile> {
                         (65, 4300), (70, 4300), (75, 4300), (80, 4300), (85, 4300)],
             pl1: 45, pl2: 90, tau: 8, powermode: 255,
             undervolt_mv: -100, max_perf_pct: 100,
-            fan_fullspeed: false, gpu_ctgp: 0, gpu_ppab: 0, power_plan: None, builtin: true,
+            fan_fullspeed: false, gpu_ctgp: 0, gpu_ppab: 0, power_plan: None,
+            cpu_temp_limit: 0, gpu_temp_limit: 0, gpu_boost: 0, gpu_target_offset: 0,
+            kbd_backlight: -1, refresh_hz: 0, builtin: true,
         },
         Profile {
             name: "Battery".into(),
@@ -94,7 +122,9 @@ pub fn builtins() -> Vec<Profile> {
                         (86, 3400), (89, 3800), (92, 4300), (94, 4300), (96, 4300)],
             pl1: 20, pl2: 35, tau: 12, powermode: 1,
             undervolt_mv: -100, max_perf_pct: 35,
-            fan_fullspeed: false, gpu_ctgp: 0, gpu_ppab: 0, power_plan: None, builtin: true,
+            fan_fullspeed: false, gpu_ctgp: 0, gpu_ppab: 0, power_plan: None,
+            cpu_temp_limit: 85, gpu_temp_limit: 80, gpu_boost: 0, gpu_target_offset: 0,
+            kbd_backlight: 0, refresh_hz: 60, builtin: true,
         },
     ]
 }
@@ -147,3 +177,27 @@ pub fn mode_name(mode: i32) -> &'static str {
 }
 
 pub const MODES: [i32; 5] = [1, 2, 3, 224, 255];
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A profile saved before the keyboard, panel and EC fields existed has to
+    /// keep loading, and has to come back meaning "leave those alone".
+    #[test]
+    fn old_profile_still_loads() {
+        let json = r#"{
+            "name": "my preference",
+            "curve": [[50,1000],[55,1900],[60,2400],[65,2900],[70,3400],
+                      [75,3800],[80,4000],[85,4300],[88,4300],[92,4300]],
+            "pl1": 45, "pl2": 90, "tau": 8, "powermode": 255, "builtin": false
+        }"#;
+        let p: Profile = serde_json::from_str(json).expect("old profile must deserialize");
+        assert_eq!(p.name, "my preference");
+        assert_eq!(p.pl1, 45);
+        assert_eq!(p.max_perf_pct, 100);
+        assert_eq!(p.cpu_temp_limit, 0);
+        assert_eq!(p.refresh_hz, 0);
+        assert_eq!(p.kbd_backlight, -1);
+    }
+}

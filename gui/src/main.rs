@@ -16,12 +16,82 @@ struct App {
     /// reports so a half-finished edit is not overwritten by the poll timer.
     draft: RefCell<Vec<(i32, i32)>>,
     dirty: RefCell<bool>,
+    /// Refresh rates the panel offers, in the order the combo box shows them.
+    rates: RefCell<Vec<i32>>,
+}
+
+fn to_extras(e: &hw::Extras) -> Extras {
+    Extras {
+        bat_capacity: e.bat_capacity,
+        bat_cycles: e.bat_cycles,
+        bat_health: e.bat_health,
+        bat_volts: e.bat_volts,
+        bat_watts: e.bat_watts,
+        bat_status: e.bat_status.clone().into(),
+        bat_model: e.bat_model.clone().into(),
+        kbd_max: e.kbd_max,
+        refresh_hz: e.refresh_hz,
+        gpu_name: e.gpu_name.clone().into(),
+        gpu_pl_max: e.gpu_pl_max,
+        igpu_mode: e.igpu_mode,
+    }
+}
+
+/// Push hardware state into the editable widgets. Only called at startup and
+/// after a write lands -- the poll timer must not do it, or a checkbox would
+/// snap back under the user's finger while a slow EC write is still in flight.
+fn seed_extras(ui: &MainWindow, e: &hw::Extras) {
+    ui.set_tog_conservation(e.conservation);
+    ui.set_tog_rapid(e.rapid_charge);
+    ui.set_tog_fnlock(e.fn_lock);
+    ui.set_tog_winkey(e.winkey);
+    ui.set_tog_touchpad(e.touchpad);
+    ui.set_tog_flip(e.flip_to_start);
+    ui.set_tog_overdrive(e.overdrive);
+    ui.set_tog_plcoupling(e.pl_coupling);
+    ui.set_edit_kbd(e.kbd_backlight);
+    ui.set_edit_cpu_temp(e.cpu_temp_limit);
+    ui.set_edit_gpu_temp(e.gpu_temp_limit);
+    ui.set_edit_crossload(e.cross_loading);
+    ui.set_edit_ec_tau(e.ec_tau);
+    ui.set_edit_gpu_boost(e.gpu_boost);
+    ui.set_edit_gpu_offset(e.gpu_target_offset);
 }
 
 fn to_curve_model(pts: &[(i32, i32)]) -> ModelRc<CurvePoint> {
     ModelRc::new(VecModel::from(
         pts.iter().map(|(t, r)| CurvePoint { temp: *t, rpm: *r }).collect::<Vec<_>>(),
     ))
+}
+
+/// Profile fields a profile may decline to have an opinion about. 0 -- or -1
+/// for the backlight -- means leave whatever the machine is already doing, so a
+/// purely thermal profile does not drag the keyboard light around with it.
+fn apply_profile_extras(hw: &Hw, p: &Profile) -> Vec<String> {
+    let mut errs = Vec::new();
+    for (node, val) in [
+        ("cpu_temperature_limit", p.cpu_temp_limit),
+        ("gpu_temperature_limit", p.gpu_temp_limit),
+        ("gpu_oc", p.gpu_boost),
+        ("gpu_power_target_offset", p.gpu_target_offset),
+    ] {
+        if val > 0 {
+            if let Err(e) = hw.set_ec(node, val) {
+                errs.push(e);
+            }
+        }
+    }
+    if p.kbd_backlight >= 0 {
+        if let Err(e) = hw.set_kbd_backlight(p.kbd_backlight) {
+            errs.push(e);
+        }
+    }
+    if p.refresh_hz > 0 {
+        if let Err(e) = hw::set_refresh(p.refresh_hz) {
+            errs.push(e);
+        }
+    }
+    errs
 }
 
 fn report(ui: &MainWindow, errs: &[String], ok: &str) {
@@ -41,6 +111,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         cfg: RefCell::new(profiles::load()),
         draft: RefCell::new(Vec::new()),
         dirty: RefCell::new(false),
+        rates: RefCell::new(hw::refresh_rates()),
     });
 
     ui.set_hw_ok(app.hw.present());
@@ -63,6 +134,20 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     *app.draft.borrow_mut() = app.hw.read_curve();
     ui.set_curve(to_curve_model(&app.draft.borrow()));
+
+    let e0 = app.hw.extras();
+    ui.set_extras(to_extras(&e0));
+    seed_extras(&ui, &e0);
+    {
+        let rates = app.rates.borrow();
+        let labels: Vec<SharedString> =
+            rates.iter().map(|h| SharedString::from(format!("{h} Hz"))).collect();
+        ui.set_refresh_options(ModelRc::new(VecModel::from(labels)));
+        ui.set_edit_refresh_idx(rates.iter().position(|h| *h == e0.refresh_hz).unwrap_or(0) as i32);
+    }
+    ui.set_gpu_clients(ModelRc::new(VecModel::from(
+        hw::gpu_clients().into_iter().map(SharedString::from).collect::<Vec<_>>(),
+    )));
 
     let refresh_profiles = {
         let app = app.clone();
@@ -210,6 +295,147 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     });
 
+    ui.on_set_flag({
+        let app = app.clone();
+        let w = ui.as_weak();
+        move |node, on| {
+            let ui = w.unwrap();
+            let node = node.to_string();
+            match app.hw.set_flag(&node, on) {
+                Ok(()) => {
+                    // Re-seed from hardware rather than trusting the click: a
+                    // firmware that swallowed the write would otherwise leave the
+                    // checkbox showing a state the machine is not in.
+                    let e = app.hw.extras();
+                    seed_extras(&ui, &e);
+                    ui.set_extras(to_extras(&e));
+                    ui.set_status_error(false);
+                    ui.set_status(format!("{node} {}", if on { "on" } else { "off" }).into());
+                }
+                Err(e) => {
+                    seed_extras(&ui, &app.hw.extras());
+                    ui.set_status_error(true);
+                    ui.set_status(e.into());
+                }
+            }
+        }
+    });
+
+    ui.on_set_charge_mode({
+        let app = app.clone();
+        let w = ui.as_weak();
+        move |conservation, rapid| {
+            let ui = w.unwrap();
+            let errs = app.hw.set_charge_mode(conservation, rapid);
+            let e = app.hw.extras();
+            seed_extras(&ui, &e);
+            ui.set_extras(to_extras(&e));
+            report(
+                &ui,
+                &errs,
+                match (e.conservation, e.rapid_charge) {
+                    (true, _) => "conservation mode on — charging stops near 60%",
+                    (_, true) => "rapid charge on",
+                    _ => "normal charging",
+                },
+            );
+        }
+    });
+
+    ui.on_apply_kbd({
+        let app = app.clone();
+        let w = ui.as_weak();
+        move |level| {
+            let ui = w.unwrap();
+            match app.hw.set_kbd_backlight(level) {
+                Ok(()) => {
+                    ui.set_status_error(false);
+                    ui.set_status(match level {
+                        0 => SharedString::from("keyboard backlight off"),
+                        n => format!("keyboard backlight level {n}").into(),
+                    });
+                }
+                Err(e) => { ui.set_status_error(true); ui.set_status(e.into()); }
+            }
+        }
+    });
+
+    ui.on_apply_refresh({
+        let app = app.clone();
+        let w = ui.as_weak();
+        move |idx| {
+            let ui = w.unwrap();
+            let hz = match app.rates.borrow().get(idx as usize) {
+                Some(h) => *h,
+                None => return,
+            };
+            match hw::set_refresh(hz) {
+                Ok(()) => {
+                    ui.set_extras(to_extras(&app.hw.extras()));
+                    ui.set_status_error(false);
+                    ui.set_status(format!("panel now at {hz} Hz").into());
+                }
+                Err(e) => { ui.set_status_error(true); ui.set_status(e.into()); }
+            }
+        }
+    });
+
+    ui.on_apply_ec_limits({
+        let app = app.clone();
+        let w = ui.as_weak();
+        move || {
+            let ui = w.unwrap();
+            let mut errs = Vec::new();
+            for (node, val) in [
+                ("cpu_temperature_limit", ui.get_edit_cpu_temp()),
+                ("cpu_cross_loading_powerlimit", ui.get_edit_crossload()),
+                ("cpu_l1_tau", ui.get_edit_ec_tau()),
+            ] {
+                if let Err(e) = app.hw.set_ec(node, val) {
+                    errs.push(e);
+                }
+            }
+            let e = app.hw.extras();
+            seed_extras(&ui, &e);
+            report(
+                &ui,
+                &errs,
+                &format!(
+                    "EC limits applied — throttle {} C, cross-load {} W, window {} s",
+                    e.cpu_temp_limit, e.cross_loading, e.ec_tau
+                ),
+            );
+        }
+    });
+
+    ui.on_apply_gpu_extra({
+        let app = app.clone();
+        let w = ui.as_weak();
+        move || {
+            let ui = w.unwrap();
+            let mut errs = Vec::new();
+            for (node, val) in [
+                ("gpu_temperature_limit", ui.get_edit_gpu_temp()),
+                ("gpu_oc", ui.get_edit_gpu_boost()),
+                ("gpu_power_target_offset", ui.get_edit_gpu_offset()),
+            ] {
+                if let Err(e) = app.hw.set_ec(node, val) {
+                    errs.push(e);
+                }
+            }
+            let e = app.hw.extras();
+            seed_extras(&ui, &e);
+            report(
+                &ui,
+                &errs,
+                &format!(
+                    "GPU firmware limits applied — throttle {} C, boost {} W, offset {} W",
+                    e.gpu_temp_limit, e.gpu_boost, e.gpu_target_offset
+                ),
+            );
+        }
+    });
+
     ui.on_set_persist({
         let app = app.clone();
         let w = ui.as_weak();
@@ -349,6 +575,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 ui.set_edit_tau(p.tau);
                 ui.set_edit_uv(p.undervolt_mv);
                 ui.set_edit_maxperf(p.max_perf_pct);
+                if p.cpu_temp_limit > 0 { ui.set_edit_cpu_temp(p.cpu_temp_limit); }
+                if p.gpu_temp_limit > 0 { ui.set_edit_gpu_temp(p.gpu_temp_limit); }
+                if p.gpu_boost > 0 { ui.set_edit_gpu_boost(p.gpu_boost); }
+                if p.gpu_target_offset > 0 { ui.set_edit_gpu_offset(p.gpu_target_offset); }
+                if p.kbd_backlight >= 0 { ui.set_edit_kbd(p.kbd_backlight); }
                 *app.dirty.borrow_mut() = true;
                 ui.set_status_error(false);
                 ui.set_status(format!("loaded '{}' — not applied yet", p.name).into());
@@ -384,12 +615,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             if p.gpu_ctgp > 0 || p.gpu_ppab > 0 {
                 errs.extend(app.hw.set_gpu(p.gpu_ctgp, p.gpu_ppab));
             }
+            errs.extend(apply_profile_extras(&app.hw, &p));
             errs.extend(app.hw.write_curve(&p.curve));
             // after the curve, because write_curve clears it to apply the table
             if p.fan_fullspeed {
                 if let Err(e) = app.hw.set_fan_fullspeed(true) { errs.push(e); }
             }
 
+            let e = app.hw.extras();
+            seed_extras(&ui, &e);
+            ui.set_extras(to_extras(&e));
             let live = app.hw.read_curve();
             *app.draft.borrow_mut() = live.clone();
             ui.set_curve(to_curve_model(&live));
@@ -423,6 +658,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 gpu_ctgp: ui.get_edit_ctgp(),
                 gpu_ppab: ui.get_edit_ppab(),
                 power_plan: None,
+                cpu_temp_limit: ui.get_edit_cpu_temp(),
+                gpu_temp_limit: ui.get_edit_gpu_temp(),
+                gpu_boost: ui.get_edit_gpu_boost(),
+                gpu_target_offset: ui.get_edit_gpu_offset(),
+                kbd_backlight: ui.get_edit_kbd(),
+                refresh_hz: app.hw.extras().refresh_hz,
                 builtin: false,
             };
             {
@@ -476,6 +717,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         p.gpu_ppab = ui.get_edit_ppab();
                         p.fan_fullspeed = app.hw.telemetry().fan_fullspeed;
                         p.powermode = app.hw.telemetry().powermode;
+                        p.cpu_temp_limit = ui.get_edit_cpu_temp();
+                        p.gpu_temp_limit = ui.get_edit_gpu_temp();
+                        p.gpu_boost = ui.get_edit_gpu_boost();
+                        p.gpu_target_offset = ui.get_edit_gpu_offset();
+                        p.kbd_backlight = ui.get_edit_kbd();
+                        p.refresh_hz = app.hw.extras().refresh_hz;
                         name = p.name.clone();
                     }
                     None => return,
@@ -559,6 +806,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         // None so the first tick counts as a transition and applies the binding
         let mut last_batt: Option<bool> = None;
         let mut last_plan: Option<String> = None;
+        // extras() shells out to nvidia-smi and kscreen-doctor, so it runs on a
+        // slower cadence than the sysfs telemetry.
+        let mut tick: u32 = 0;
         timer.start(
             slint::TimerMode::Repeated,
             std::time::Duration::from_millis(1500),
@@ -632,7 +882,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             app.hw.set_power(p.pl1, p.pl2, p.tau);
                             let _ = app.hw.set_undervolt(p.undervolt_mv);
                             let _ = app.hw.set_max_perf(p.max_perf_pct);
+                            apply_profile_extras(&app.hw, &p);
                             app.hw.write_curve(&p.curve);
+                            let e = app.hw.extras();
+                            seed_extras(&ui, &e);
+                            ui.set_extras(to_extras(&e));
                             ui.set_edit_pl1(p.pl1);
                             ui.set_edit_pl2(p.pl2);
                             ui.set_edit_tau(p.tau);
@@ -663,8 +917,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         app.hw.set_power(p.pl1, p.pl2, p.tau);
                         let _ = app.hw.set_undervolt(p.undervolt_mv);
                         let _ = app.hw.set_max_perf(p.max_perf_pct);
+                        apply_profile_extras(&app.hw, &p);
                         app.hw.write_curve(&p.curve);
                         if p.fan_fullspeed { let _ = app.hw.set_fan_fullspeed(true); }
+                        let e = app.hw.extras();
+                        seed_extras(&ui, &e);
+                        ui.set_extras(to_extras(&e));
                         ui.set_edit_pl1(p.pl1);
                         ui.set_edit_pl2(p.pl2);
                         ui.set_edit_tau(p.tau);
@@ -674,6 +932,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         ui.set_status(format!("KDE plan '{plan}' - applied '{}'", p.name).into());
                         *app.dirty.borrow_mut() = false;
                     }
+                }
+
+                tick += 1;
+                if tick % 8 == 0 {
+                    // Read-only display fields only. The editable widgets are
+                    // seeded on write, never here.
+                    ui.set_extras(to_extras(&app.hw.extras()));
+                    ui.set_gpu_clients(ModelRc::new(VecModel::from(
+                        hw::gpu_clients().into_iter().map(SharedString::from).collect::<Vec<_>>(),
+                    )));
                 }
 
                 // Never clobber a curve the user is midway through editing.

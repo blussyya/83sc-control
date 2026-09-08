@@ -78,6 +78,23 @@ apply_boot_conf() {
         GPU_PPAB)      put "$LEGION/gpu_ppab_powerlimit" "$val" gpu_ppab || true ;;
         CURVE_PWM)     [[ -n ${h:-} ]] && apply_curve_pwm "$h" "$val" ;;
         FAN_FULLSPEED) put "$LEGION/fan_fullspeed" "$val" fan_fullspeed || true ;;
+        # Best effort from here down: none of these are the stutter fix, and a
+        # firmware that declines one should not fail the whole replay.
+        CPU_TEMP_LIMIT) put "$LEGION/cpu_temperature_limit" "$val" cpu_temp_limit || true ;;
+        GPU_TEMP_LIMIT) put "$LEGION/gpu_temperature_limit" "$val" gpu_temp_limit || true ;;
+        CROSS_LOADING)  put "$LEGION/cpu_cross_loading_powerlimit" "$val" cross_loading || true ;;
+        EC_TAU)         put "$LEGION/cpu_l1_tau" "$val" ec_tau || true ;;
+        GPU_BOOST)      put "$LEGION/gpu_oc" "$val" gpu_boost || true ;;
+        GPU_OFFSET)     put "$LEGION/gpu_power_target_offset" "$val" gpu_offset || true ;;
+        PL_COUPLING)    put "$LEGION/cpu_pl_coupling" "$val" pl_coupling || true ;;
+        CONSERVATION)   put "$LEGION/battery_conservation" "$val" conservation || true ;;
+        RAPID_CHARGE)   put "$LEGION/rapidcharge" "$val" rapid_charge || true ;;
+        FN_LOCK)        put "$LEGION/fn_lock" "$val" fn_lock || true ;;
+        WINKEY)         put "$LEGION/winkey" "$val" winkey || true ;;
+        TOUCHPAD)       put "$LEGION/touchpad" "$val" touchpad || true ;;
+        FLIP_TO_START)  put "$LEGION/flip_to_start" "$val" flip_to_start || true ;;
+        OVERDRIVE)      put "$LEGION/overdrive" "$val" overdrive || true ;;
+        KBD_BACKLIGHT)  put /sys/class/leds/platform::kbd_backlight/brightness "$val" kbd || true ;;
         esac
     done < "$BOOT_CONF"
     log "replayed $BOOT_CONF"

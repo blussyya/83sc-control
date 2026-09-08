@@ -104,6 +104,57 @@ Arg1 == 0x06  ->  SFAN (Arg2)           set
 
 ---
 
+## Legion Toolkit parity
+
+Every control was probed the same way: read, write a different value, read
+back, restore. "Inert" means the write reported success and the node did not
+move — the silent-rejection pattern this firmware uses throughout.
+
+| Toolkit feature | This machine | Node |
+|---|---|---|
+| Power modes, custom mode | works | `powermode` |
+| CPU power limits | works | RAPL, plus `cpu_longterm/shortterm_powerlimit` |
+| CPU throttle point | works, 94 °C stock | `cpu_temperature_limit` |
+| Cross-loading limit | works, 30 W stock | `cpu_cross_loading_powerlimit` |
+| EC power window | works, quantised to 4 s | `cpu_l1_tau` |
+| PL1/PL2 coupling | works | `cpu_pl_coupling` |
+| GPU cTGP / PPAB | works, 45 W + 10 W stock | `gpu_ctgp_powerlimit`, `gpu_ppab_powerlimit` |
+| GPU power boost | works, 10 W stock | `gpu_oc` — **watts here, not a switch** |
+| GPU AC target offset | works, 30 W stock | `gpu_power_target_offset` |
+| GPU throttle point | works, 87 °C stock | `gpu_temperature_limit` |
+| Fan curve, full speed | works in powermode 255 | `pwm1_auto_point*`, `fan_fullspeed` |
+| Conservation mode | works | `battery_conservation` |
+| Rapid charge | works, exclusive with the above | `rapidcharge` |
+| Battery health / cycles | works | `/sys/class/power_supply/BAT1` |
+| Keyboard backlight | works, 3 levels white | `platform::kbd_backlight` |
+| Fn lock | works | `fn_lock` |
+| Win key, touchpad lock | works, 1 = enabled | `winkey`, `touchpad` |
+| Flip to start | works | `flip_to_start` |
+| Panel overdrive | works | `overdrive` |
+| Refresh rate 60/144 | works, via compositor | `kscreen-doctor` |
+| CPU overclock | **inert** — disabled in firmware | `cpu_oc`, `issupportcpuoc` |
+| Fan max speed | **inert** | `fan_maxspeed` |
+| Y-logo lighting | **inert** — no lit logo on this chassis | `platform::ylogo` |
+| I/O port lighting | **inert** | `platform::ioport` |
+| Lock fan controller | EINVAL | `lockfancontroller` |
+| G-Sync | not supported | `issupportgsync` = 0 |
+| HDR | panel reports incapable | — |
+| RGB / Spectrum keyboard | not this chassis | — |
+| Hybrid / iGPU-only switch | node exists, deliberately not exposed | `igpumode` |
+
+Two notes on the last two rows. `gpu_oc` reads 10 rather than 0/1 because this
+model takes the `ACCESS_METHOD_WMI3_CLAMPED` path, where the node carries
+`OtherMethodFeature_GPU_POWER_BOOST` in watts. And `igpumode` is writable, but
+switching to integrated-only under a running X or Wayland session that is bound
+to the dGPU takes the desktop down with it, so the GUI shows the mode and does
+not offer the switch.
+
+Beyond the toolkit: RAPL tau, undervolting, and `intel_pstate/max_perf_pct`
+have no Windows-toolkit equivalent and are the settings that actually fixed the
+stutter.
+
+---
+
 ## Validation status
 
 | Scenario | Result |

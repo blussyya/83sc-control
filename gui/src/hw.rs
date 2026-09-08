@@ -78,6 +78,49 @@ pub struct Telemetry {
     pub on_battery: bool,
 }
 
+/// Everything outside the thermal/power core: battery, input, panel and the
+/// embedded controller's own limits. Polled less often than Telemetry because
+/// none of it moves on its own.
+#[derive(Clone, Debug, Default)]
+pub struct Extras {
+    pub bat_capacity: i32,
+    pub bat_cycles: i32,
+    pub bat_health: i32,
+    pub bat_volts: f32,
+    pub bat_watts: f32,
+    pub bat_status: String,
+    pub bat_model: String,
+    pub conservation: bool,
+    pub rapid_charge: bool,
+
+    pub kbd_backlight: i32,
+    pub kbd_max: i32,
+    pub fn_lock: bool,
+    pub winkey: bool,
+    pub touchpad: bool,
+    pub flip_to_start: bool,
+
+    pub overdrive: bool,
+    pub refresh_hz: i32,
+
+    pub cpu_temp_limit: i32,
+    pub gpu_temp_limit: i32,
+    pub cross_loading: i32,
+    pub ec_tau: i32,
+    pub pl_coupling: bool,
+    pub gpu_boost: i32,
+    pub gpu_target_offset: i32,
+
+    pub gpu_name: String,
+    pub gpu_pl_max: i32,
+    pub igpu_mode: i32,
+}
+
+pub const KBD_LEDS: [&str; 2] = [
+    "/sys/class/leds/platform::kbd_backlight/brightness",
+    "/sys/class/leds/platform::kbd_backlight_1/brightness",
+];
+
 pub struct Hw {
     pub legion_hwmon: Option<PathBuf>,
     pub coretemp: Option<PathBuf>,
@@ -245,6 +288,96 @@ impl Hw {
         )
     }
 
+    pub fn extras(&self) -> Extras {
+        let mut e = Extras::default();
+        let bat = "/sys/class/power_supply/BAT1";
+        e.bat_capacity = read_i32(&format!("{bat}/capacity")).unwrap_or(0);
+        e.bat_cycles = read_i32(&format!("{bat}/cycle_count")).unwrap_or(0);
+        let full = read_i32(&format!("{bat}/energy_full")).unwrap_or(0);
+        let design = read_i32(&format!("{bat}/energy_full_design")).unwrap_or(0);
+        e.bat_health = if design > 0 { (full as i64 * 100 / design as i64) as i32 } else { 0 };
+        e.bat_volts = read_i32(&format!("{bat}/voltage_now")).unwrap_or(0) as f32 / 1_000_000.0;
+        e.bat_watts = read_i32(&format!("{bat}/power_now")).unwrap_or(0) as f32 / 1_000_000.0;
+        e.bat_status = read(&format!("{bat}/status")).unwrap_or_default();
+        e.bat_model = read(&format!("{bat}/model_name")).unwrap_or_default();
+
+        let flag = |n: &str| read(&format!("{LEGION}/{n}")).as_deref() == Some("1");
+        e.conservation = flag("battery_conservation");
+        e.rapid_charge = flag("rapidcharge");
+        e.fn_lock = flag("fn_lock");
+        e.winkey = flag("winkey");
+        e.touchpad = flag("touchpad");
+        e.flip_to_start = flag("flip_to_start");
+        e.overdrive = flag("overdrive");
+        e.pl_coupling = flag("cpu_pl_coupling");
+
+        e.kbd_backlight = read_i32(KBD_LEDS[0]).unwrap_or(0);
+        e.kbd_max = read_i32("/sys/class/leds/platform::kbd_backlight/max_brightness").unwrap_or(2);
+
+        let ec = |n: &str| read_i32(&format!("{LEGION}/{n}")).unwrap_or(0);
+        e.cpu_temp_limit = ec("cpu_temperature_limit");
+        e.gpu_temp_limit = ec("gpu_temperature_limit");
+        e.cross_loading = ec("cpu_cross_loading_powerlimit");
+        e.ec_tau = ec("cpu_l1_tau");
+        // On this model gpu_oc goes through the WMI3 clamped path, where it is
+        // GPU power boost in watts rather than the on/off switch the name
+        // suggests.
+        e.gpu_boost = ec("gpu_oc");
+        e.gpu_target_offset = ec("gpu_power_target_offset");
+        e.igpu_mode = ec("igpumode");
+
+        e.refresh_hz = current_refresh().unwrap_or(0);
+
+        if let Ok(o) = Command::new("nvidia-smi")
+            .args(["--query-gpu=name,power.max_limit", "--format=csv,noheader,nounits"])
+            .output()
+        {
+            let s = String::from_utf8_lossy(&o.stdout);
+            let mut f = s.trim().split(',');
+            e.gpu_name = f.next().unwrap_or("").trim().to_string();
+            e.gpu_pl_max = f.next().unwrap_or("0").trim().parse::<f32>().unwrap_or(0.0) as i32;
+        }
+        e
+    }
+
+    /// One physical zone behind two LED nodes: ideapad and legion_laptop each
+    /// register one and they drive the same EC register, so both are written to
+    /// keep the readback consistent whichever one is read.
+    pub fn set_kbd_backlight(&self, level: i32) -> Result<(), String> {
+        let level = level.clamp(0, 2);
+        let mut first = Ok(());
+        for node in KBD_LEDS {
+            let r = write(node, level);
+            if first.is_ok() {
+                first = r;
+            }
+        }
+        first
+    }
+
+    /// Conservation mode and rapid charge are mutually exclusive in firmware,
+    /// so enabling one clears the other rather than letting the EC arbitrate.
+    pub fn set_charge_mode(&self, conservation: bool, rapid: bool) -> Vec<String> {
+        let mut errs = Vec::new();
+        if conservation && rapid {
+            return vec!["conservation mode and rapid charge cannot both be on".into()];
+        }
+        for (node, on) in [("battery_conservation", conservation), ("rapidcharge", rapid)] {
+            if let Err(e) = write(&format!("{LEGION}/{node}"), if on { 1 } else { 0 }) {
+                errs.push(e);
+            }
+        }
+        errs
+    }
+
+    pub fn set_flag(&self, node: &str, on: bool) -> Result<(), String> {
+        write(&format!("{LEGION}/{node}"), if on { 1 } else { 0 })
+    }
+
+    pub fn set_ec(&self, node: &str, value: i32) -> Result<(), String> {
+        write(&format!("{LEGION}/{node}"), value)
+    }
+
     /// Undervolt goes through the helper's dedicated verb rather than a path
     /// write: it edits /etc/intel-undervolt.conf and invokes the tool, and that
     /// file is outside the writable sysfs prefixes by design.
@@ -333,6 +466,125 @@ pub fn read_undervolt() -> i32 {
         }
     }
     0
+}
+
+/// The refresh rate is a compositor setting rather than a firmware one, so it
+/// goes through kscreen-doctor in the user's own session and never touches the
+/// helper.
+fn kscreen() -> Option<serde_json::Value> {
+    let o = Command::new("kscreen-doctor").arg("-j").output().ok()?;
+    serde_json::from_slice(&o.stdout).ok()
+}
+
+fn panel(v: &serde_json::Value) -> Option<&serde_json::Value> {
+    v["outputs"].as_array()?.iter().find(|o| o["enabled"] == true)
+}
+
+pub fn current_refresh() -> Option<i32> {
+    let v = kscreen()?;
+    let out = panel(&v)?;
+    let cur = out["currentModeId"].as_str()?;
+    out["modes"]
+        .as_array()?
+        .iter()
+        .find(|m| m["id"].as_str() == Some(cur))
+        .and_then(|m| m["refreshRate"].as_f64())
+        .map(|r| r.round() as i32)
+}
+
+/// Rates offered at the resolution the panel is running now, highest first.
+/// Switching resolution as a side effect of changing refresh rate would be a
+/// surprise, so lower-resolution modes are filtered out.
+pub fn refresh_rates() -> Vec<i32> {
+    let mut out = Vec::new();
+    if let Some(v) = kscreen() {
+        if let Some(o) = panel(&v) {
+            let cur = o["currentModeId"].as_str().unwrap_or("");
+            let modes = match o["modes"].as_array() {
+                Some(m) => m,
+                None => return out,
+            };
+            let (w, h) = modes
+                .iter()
+                .find(|m| m["id"].as_str() == Some(cur))
+                .map(|m| (m["size"]["width"].as_i64(), m["size"]["height"].as_i64()))
+                .unwrap_or((None, None));
+            for m in modes {
+                if m["size"]["width"].as_i64() != w || m["size"]["height"].as_i64() != h {
+                    continue;
+                }
+                if let Some(r) = m["refreshRate"].as_f64() {
+                    let hz = r.round() as i32;
+                    if !out.contains(&hz) {
+                        out.push(hz);
+                    }
+                }
+            }
+        }
+    }
+    out.sort_unstable_by(|a, b| b.cmp(a));
+    out
+}
+
+pub fn set_refresh(hz: i32) -> Result<(), String> {
+    let v = kscreen().ok_or("kscreen-doctor is not available")?;
+    let out = panel(&v).ok_or("no enabled display found")?;
+    let name = out["name"].as_str().ok_or("display has no name")?;
+    let cur = out["currentModeId"].as_str().unwrap_or("");
+    let modes = out["modes"].as_array().ok_or("display reports no modes")?;
+    let (w, h) = modes
+        .iter()
+        .find(|m| m["id"].as_str() == Some(cur))
+        .map(|m| (m["size"]["width"].as_i64(), m["size"]["height"].as_i64()))
+        .unwrap_or((None, None));
+    let id = modes
+        .iter()
+        .find(|m| {
+            m["size"]["width"].as_i64() == w
+                && m["size"]["height"].as_i64() == h
+                && m["refreshRate"].as_f64().map(|r| r.round() as i32) == Some(hz)
+        })
+        .and_then(|m| m["id"].as_str())
+        .ok_or_else(|| format!("the panel has no {hz} Hz mode at this resolution"))?;
+
+    let o = Command::new("kscreen-doctor")
+        .arg(format!("output.{name}.mode.{id}"))
+        .output()
+        .map_err(|e| format!("could not run kscreen-doctor: {e}"))?;
+    if o.status.success() {
+        Ok(())
+    } else {
+        Err(String::from_utf8_lossy(&o.stderr).trim().lines().last()
+            .unwrap_or("refresh rate change failed").to_string())
+    }
+}
+
+/// Processes currently holding the discrete GPU awake, as "name (MiB)".
+pub fn gpu_clients() -> Vec<String> {
+    let o = match Command::new("nvidia-smi")
+        .args(["--query-compute-apps=process_name,used_memory", "--format=csv,noheader,nounits"])
+        .output()
+    {
+        Ok(o) => o,
+        Err(_) => return Vec::new(),
+    };
+    let mut v: Vec<String> = String::from_utf8_lossy(&o.stdout)
+        .lines()
+        .filter(|l| !l.trim().is_empty())
+        .map(|l| {
+            let mut f = l.split(',');
+            let name = f.next().unwrap_or("").trim();
+            let name = name.rsplit('/').next().unwrap_or(name);
+            let mem = f.next().unwrap_or("").trim();
+            format!("{name} ({mem} MiB)")
+        })
+        .collect();
+    // Graphics clients do not show up in the compute-apps query, so fall back to
+    // the runtime power state to say whether anything is holding the card up.
+    if v.is_empty() && read("/sys/bus/pci/devices/0000:01:00.0/power/runtime_status").as_deref() == Some("active") {
+        v.push("awake, no compute clients".into());
+    }
+    v
 }
 
 pub fn pwm_to_rpm(pwm: i32, max_rpm: i32) -> i32 {
