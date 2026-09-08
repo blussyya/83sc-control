@@ -84,6 +84,7 @@ export component MainWindow inherits Window {
     callback apply-maxperf();
     callback set-persist(bool);
     callback bind-power-source(int, int);
+    callback update-profile(int);
 
     VerticalBox {
         padding: 14px;
@@ -184,6 +185,10 @@ export component MainWindow inherits Window {
                         }
                     }
                     Button {
+                        text: "Update selected";
+                        clicked => { update-profile(sel-profile); }
+                    }
+                    Button {
                         text: "Delete selected";
                         clicked => { delete-profile(sel-profile); }
                     }
@@ -205,7 +210,8 @@ export component MainWindow inherits Window {
 
                     Text { text: "Run this profile when"; font-size: 11px; color: #9aa0a6; }
                     power-box := ComboBox {
-                        model: ["(never)", "on battery", "on AC"];
+                        model: ["(never)", "on battery", "on AC",
+                                "KDE power-saver", "KDE balanced", "KDE performance"];
                         current-index: bind-power;
                         selected => { bind-power = self.current-index; }
                     }

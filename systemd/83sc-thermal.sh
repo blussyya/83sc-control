@@ -53,6 +53,53 @@ put() {
 }
 
 CURVE_CONF=/etc/83sc-control/curve.conf
+BOOT_CONF=/etc/83sc-control/boot.conf
+
+# A full snapshot written by the GUI or `83sc boot-save` takes precedence over
+# the built-in profiles below: it replays exactly what the machine was running.
+apply_boot_conf() {
+    local h key val
+    h=$(find_hwmon) || true
+    # shellcheck disable=SC1090
+    while IFS='=' read -r key val; do
+        [[ -z $key || $key == \#* ]] && continue
+        case "$key" in
+        POWERMODE)     put "$LEGION/powermode" "$val" powermode || rc=1; sleep 1 ;;
+        UNDERVOLT_MV)  [[ -x /usr/bin/intel-undervolt && $val != 0 ]] && {
+                           sed -i -E "s/^enable .*/enable yes/; s/^undervolt 0 'CPU' .*/undervolt 0 'CPU' $val/; s/^undervolt 2 'CPU Cache' .*/undervolt 2 'CPU Cache' $val/" \
+                               /etc/intel-undervolt.conf 2>/dev/null
+                           /usr/bin/intel-undervolt apply >/dev/null 2>&1 || fail "undervolt apply failed"
+                       } ;;
+        PL1_UW)        put "$RAPL/constraint_0_power_limit_uw" "$val" PL1 || rc=1 ;;
+        PL2_UW)        put "$RAPL/constraint_1_power_limit_uw" "$val" PL2 || rc=1 ;;
+        TAU_US)        put "$RAPL/constraint_0_time_window_us" "$val" tau || rc=1 ;;
+        MAX_PERF_PCT)  put /sys/devices/system/cpu/intel_pstate/max_perf_pct "$val" max_perf || rc=1 ;;
+        GPU_CTGP)      put "$LEGION/gpu_ctgp_powerlimit" "$val" gpu_ctgp || true ;;
+        GPU_PPAB)      put "$LEGION/gpu_ppab_powerlimit" "$val" gpu_ppab || true ;;
+        CURVE_PWM)     [[ -n ${h:-} ]] && apply_curve_pwm "$h" "$val" ;;
+        FAN_FULLSPEED) put "$LEGION/fan_fullspeed" "$val" fan_fullspeed || true ;;
+        esac
+    done < "$BOOT_CONF"
+    log "replayed $BOOT_CONF"
+}
+
+# Points are stored as temp:pwm pairs, already in hardware units, so no
+# rpm conversion is needed and nothing can drift on the way back in.
+apply_curve_pwm() {
+    local h=$1 spec=$2 i=10 pair temp pwm
+    [[ "$(cat "$LEGION/powermode" 2>/dev/null)" != "255" ]] && {
+        put "$LEGION/powermode" 255 powermode || rc=1; sleep 1; }
+    put "$LEGION/fan_fullspeed" 0 fan_fullspeed || true
+    [[ -e $h/minifancurve ]] && put "$h/minifancurve" 0 minifancurve || true
+    # highest point first so trip temperatures never transiently invert
+    IFS=',' read -ra pairs <<< "$spec"
+    for (( i=${#pairs[@]}-1; i>=0; i-- )); do
+        pair=${pairs[$i]}; temp=${pair%%:*}; pwm=${pair##*:}
+        put "$h/pwm1_auto_point$((i+1))_temp" "$temp" "curve[$((i+1))].temp" || rc=1
+        put "$h/pwm1_auto_point$((i+1))_temp_hyst" "$(( temp > 5 ? temp - 5 : 0 ))" hyst || true
+        put "$h/pwm1_auto_point$((i+1))_pwm" "$pwm" "curve[$((i+1))].pwm" || rc=1
+    done
+}
 
 find_hwmon() {
     local h
@@ -99,7 +146,11 @@ apply_curve() {
     log "applied saved fan curve from $CURVE_CONF"
 }
 
-if [[ -e $LEGION/powermode ]]; then
+used_boot_conf=0
+if [[ -r $BOOT_CONF ]]; then
+    apply_boot_conf
+    used_boot_conf=1
+elif [[ -e $LEGION/powermode ]]; then
     put "$LEGION/powermode" "$POWERMODE" "powermode" || rc=1
     if [[ -r $CURVE_CONF ]]; then
         sleep 1
@@ -112,7 +163,10 @@ else
     rc=1
 fi
 
-if [[ -d $RAPL ]]; then
+# boot.conf already set these; re-applying the named profile here would undo it
+if (( used_boot_conf )); then
+    :
+elif [[ -d $RAPL ]]; then
     put "$RAPL/constraint_0_power_limit_uw" "$((PL1_WATTS * 1000000))" "PL1" || rc=1
     put "$RAPL/constraint_1_power_limit_uw" "$((PL2_WATTS * 1000000))" "PL2" || rc=1
     put "$RAPL/constraint_0_time_window_us" "$((TAU_SECONDS * 1000000))" "tau" || rc=1

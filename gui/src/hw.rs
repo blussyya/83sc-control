@@ -283,6 +283,27 @@ impl Hw {
         write(&format!("{PSTATE}/max_perf_pct"), pct.clamp(10, 100))
     }
 
+    pub fn set_fan_fullspeed(&self, on: bool) -> Result<(), String> {
+        write(&format!("{LEGION}/fan_fullspeed"), if on { 1 } else { 0 })
+    }
+
+    /// Snapshot whatever the hardware is currently doing into
+    /// /etc/83sc-control/boot.conf, which 83sc-thermal.service replays at boot.
+    pub fn boot_save(&self) -> Result<(), String> {
+        let out = Command::new("sudo").args(["-n", HELPER, "boot-save"]).output()
+            .map_err(|e| format!("could not run helper: {e}"))?;
+        if out.status.success() { Ok(()) } else {
+            Err(String::from_utf8_lossy(&out.stderr).trim().lines().next()
+                .unwrap_or("boot-save failed").to_string())
+        }
+    }
+
+    pub fn power_plan(&self) -> Option<String> {
+        let o = Command::new("powerprofilesctl").arg("get").output().ok()?;
+        let s = String::from_utf8_lossy(&o.stdout).trim().to_string();
+        if s.is_empty() { None } else { Some(s) }
+    }
+
     pub fn set_powermode(&self, mode: i32) -> Result<(), String> {
         write(&format!("{LEGION}/powermode"), mode)
     }

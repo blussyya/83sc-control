@@ -513,6 +513,63 @@ def cmd_undervolt(argv):
     return 0
 
 
+BOOT_CONF = "/etc/83sc-control/boot.conf"
+
+
+def cmd_boot_save(argv):
+    """Snapshot the live hardware state to /etc/83sc-control/boot.conf.
+
+    83sc-thermal.service replays this at boot. Written from what the hardware
+    actually reports rather than from what a caller claims, so it can never
+    record a setting that did not take.
+    """
+    lh = hwmon("legion_hwmon")
+    lines = ["# written by 83sc-control boot-save", "# replayed by 83sc-thermal.service"]
+
+    def put(k, v):
+        if v is not None and v != "":
+            lines.append(f"{k}={v}")
+
+    put("POWERMODE", read(f"{LEGION}/powermode"))
+    put("FAN_FULLSPEED", read(f"{LEGION}/fan_fullspeed"))
+    put("GPU_CTGP", read(f"{LEGION}/gpu_ctgp_powerlimit"))
+    put("GPU_PPAB", read(f"{LEGION}/gpu_ppab_powerlimit"))
+    for key, node in (("PL1_UW", "constraint_0_power_limit_uw"),
+                      ("PL2_UW", "constraint_1_power_limit_uw"),
+                      ("TAU_US", "constraint_0_time_window_us")):
+        put(key, read(f"{RAPL}/{node}"))
+    put("MAX_PERF_PCT", read(f"{PSTATE}/max_perf_pct"))
+
+    uv = 0
+    try:
+        r = subprocess.run(["/usr/bin/intel-undervolt", "read"], capture_output=True, text=True)
+        m = re.search(r"^CPU \(0\): *(-?[\d.]+) mV", r.stdout or "", re.M)
+        if m:
+            uv = int(round(float(m.group(1))))
+    except OSError:
+        pass
+    put("UNDERVOLT_MV", uv)
+
+    if lh:
+        curve = []
+        for i in range(1, 11):
+            t = read(f"{lh}/pwm1_auto_point{i}_temp")
+            p = read(f"{lh}/pwm1_auto_point{i}_pwm")
+            if t is None or p is None:
+                curve = []
+                break
+            curve.append(f"{t}:{p}")
+        if curve:
+            put("CURVE_PWM", ",".join(curve))
+            put("FAN_MAX", read(f"{lh}/fan1_max"))
+
+    os.makedirs(os.path.dirname(BOOT_CONF), mode=0o755, exist_ok=True)
+    with open(BOOT_CONF, "w") as f:
+        f.write("\n".join(lines) + "\n")
+    os.chmod(BOOT_CONF, 0o644)
+    print(json.dumps({"file": BOOT_CONF, "settings": len(lines) - 2}))
+
+
 def cmd_undervolt_persist(argv):
     """Enable or disable the undervolt surviving reboot.
 
@@ -601,6 +658,7 @@ def main():
         "dump-legion": lambda: cmd_dump_legion(rest),
         "undervolt": lambda: cmd_undervolt(rest),
         "undervolt-persist": lambda: cmd_undervolt_persist(rest),
+        "boot-save": lambda: cmd_boot_save(rest),
         "gpu-hotspot": lambda: cmd_gpu_hotspot(rest),
         "acpidump": lambda: cmd_acpidump(rest), "modprobe": lambda: cmd_modprobe(rest),
     }

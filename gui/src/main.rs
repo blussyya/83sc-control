@@ -81,7 +81,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         .find(|(_, n)| *n == p.name)
                         .map(|(m, _)| format!("  [{}]", profiles::mode_name(*m)))
                         .unwrap_or_default();
-                    SharedString::from(format!("{}{}", p.name, bound))
+                    let cfg = app.cfg.borrow();
+                    let src = if cfg.on_battery_profile.as_deref() == Some(p.name.as_str()) {
+                        "  [batt]".to_string()
+                    } else if cfg.on_ac_profile.as_deref() == Some(p.name.as_str()) {
+                        "  [AC]".to_string()
+                    } else if let Some(pl) = &p.power_plan {
+                        format!("  [{pl}]")
+                    } else {
+                        String::new()
+                    };
+                    SharedString::from(format!("{}{}{}", p.name, bound, src))
                 })
                 .collect();
             ui.set_profile_names(ModelRc::new(VecModel::from(names)));
@@ -209,16 +219,23 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let _ = profiles::save(&app.cfg.borrow());
             // Power limits and the fan curve already persist via
             // 83sc-thermal.service; the undervolt needs its own unit enabled.
-            match app.hw.set_undervolt_persist(on) {
-                Ok(()) => {
-                    ui.set_status_error(false);
-                    ui.set_status(if on {
-                        SharedString::from("undervolt will re-apply at boot")
-                    } else {
-                        SharedString::from("undervolt will not re-apply at boot")
-                    });
-                }
-                Err(e) => { ui.set_status_error(true); ui.set_status(e.into()); }
+            let mut errs = Vec::new();
+            if let Err(e) = app.hw.set_undervolt_persist(on) { errs.push(e); }
+            if on {
+                // snapshot everything live so the boot unit replays the full state,
+                // not just power limits
+                if let Err(e) = app.hw.boot_save() { errs.push(e); }
+            }
+            if errs.is_empty() {
+                ui.set_status_error(false);
+                ui.set_status(if on {
+                    SharedString::from("saved - full state will be restored at boot")
+                } else {
+                    SharedString::from("boot restore disabled")
+                });
+            } else {
+                ui.set_status_error(true);
+                ui.set_status(errs.join("; ").into());
             }
         }
     });
@@ -242,9 +259,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 if cfg.on_ac_profile.as_deref() == Some(name.as_str()) {
                     cfg.on_ac_profile = None;
                 }
+                if let Some(p) = cfg.profiles.iter_mut().find(|p| p.name == name) {
+                    p.power_plan = None;
+                }
                 match which {
                     1 => cfg.on_battery_profile = Some(name.clone()),
                     2 => cfg.on_ac_profile = Some(name.clone()),
+                    3..=5 => {
+                        let plan = ["power-saver", "balanced", "performance"][(which - 3) as usize];
+                        if let Some(p) = cfg.profiles.iter_mut().find(|p| p.name == name) {
+                            p.power_plan = Some(plan.to_string());
+                        }
+                    }
                     _ => {}
                 }
                 let _ = profiles::save(&cfg);
@@ -254,7 +280,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             ui.set_status(match which {
                 1 => format!("'{name}' will apply on battery").into(),
                 2 => format!("'{name}' will apply on AC").into(),
-                _ => SharedString::from(format!("power-source binding cleared for '{name}'")),
+                3..=5 => {
+                    let plan = ["power-saver", "balanced", "performance"][(which - 3) as usize];
+                    format!("'{name}' will apply on KDE '{plan}'").into()
+                }
+                _ => SharedString::from(format!("binding cleared for '{name}'")),
             });
         }
     });
@@ -351,7 +381,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             if let Err(e) = app.hw.set_max_perf(p.max_perf_pct) {
                 errs.push(e);
             }
+            if p.gpu_ctgp > 0 || p.gpu_ppab > 0 {
+                errs.extend(app.hw.set_gpu(p.gpu_ctgp, p.gpu_ppab));
+            }
             errs.extend(app.hw.write_curve(&p.curve));
+            // after the curve, because write_curve clears it to apply the table
+            if p.fan_fullspeed {
+                if let Err(e) = app.hw.set_fan_fullspeed(true) { errs.push(e); }
+            }
 
             let live = app.hw.read_curve();
             *app.draft.borrow_mut() = live.clone();
@@ -382,6 +419,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 powermode: 0,
                 undervolt_mv: ui.get_edit_uv(),
                 max_perf_pct: ui.get_edit_maxperf(),
+                fan_fullspeed: app.hw.telemetry().fan_fullspeed,
+                gpu_ctgp: ui.get_edit_ctgp(),
+                gpu_ppab: ui.get_edit_ppab(),
+                power_plan: None,
                 builtin: false,
             };
             {
@@ -404,6 +445,46 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     ui.set_status(e.into());
                 }
             }
+        }
+    });
+
+    ui.on_update_profile({
+        let app = app.clone();
+        let w = ui.as_weak();
+        let refresh = refresh_profiles.clone();
+        move |idx| {
+            let ui = w.unwrap();
+            let i = idx as usize;
+            let name;
+            {
+                let mut cfg = app.cfg.borrow_mut();
+                match cfg.profiles.get_mut(i) {
+                    Some(p) if p.builtin => {
+                        ui.set_status_error(true);
+                        ui.set_status("built-in profiles cannot be edited - use 'save as' to make your own".into());
+                        return;
+                    }
+                    Some(p) => {
+                        // capture everything currently on screen and in hardware
+                        p.curve = app.draft.borrow().clone();
+                        p.pl1 = ui.get_edit_pl1();
+                        p.pl2 = ui.get_edit_pl2();
+                        p.tau = ui.get_edit_tau();
+                        p.undervolt_mv = ui.get_edit_uv();
+                        p.max_perf_pct = ui.get_edit_maxperf();
+                        p.gpu_ctgp = ui.get_edit_ctgp();
+                        p.gpu_ppab = ui.get_edit_ppab();
+                        p.fan_fullspeed = app.hw.telemetry().fan_fullspeed;
+                        p.powermode = app.hw.telemetry().powermode;
+                        name = p.name.clone();
+                    }
+                    None => return,
+                }
+                let _ = profiles::save(&cfg);
+            }
+            refresh(&ui);
+            ui.set_status_error(false);
+            ui.set_status(format!("updated '{name}' with the current settings").into());
         }
     });
 
@@ -477,6 +558,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let mut last_mode = i32::MIN;
         // None so the first tick counts as a transition and applies the binding
         let mut last_batt: Option<bool> = None;
+        let mut last_plan: Option<String> = None;
         timer.start(
             slint::TimerMode::Repeated,
             std::time::Duration::from_millis(1500),
@@ -562,6 +644,36 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         }
                     }
                     *app.dirty.borrow_mut() = false;
+                }
+
+                // KDE / power-profiles-daemon plan changed: apply any profile
+                // bound to the new plan. Independent of the AC binding above so
+                // both can be used together.
+                let plan_now = app.hw.power_plan();
+                if plan_now.is_some() && plan_now != last_plan {
+                    last_plan = plan_now.clone();
+                    let plan = plan_now.unwrap_or_default();
+                    let p = app.cfg.borrow().profiles.iter()
+                        .find(|p| p.power_plan.as_deref() == Some(plan.as_str())).cloned();
+                    if let Some(p) = p {
+                        if p.powermode != 0 {
+                            let _ = app.hw.set_powermode(p.powermode);
+                            std::thread::sleep(std::time::Duration::from_millis(600));
+                        }
+                        app.hw.set_power(p.pl1, p.pl2, p.tau);
+                        let _ = app.hw.set_undervolt(p.undervolt_mv);
+                        let _ = app.hw.set_max_perf(p.max_perf_pct);
+                        app.hw.write_curve(&p.curve);
+                        if p.fan_fullspeed { let _ = app.hw.set_fan_fullspeed(true); }
+                        ui.set_edit_pl1(p.pl1);
+                        ui.set_edit_pl2(p.pl2);
+                        ui.set_edit_tau(p.tau);
+                        ui.set_edit_uv(p.undervolt_mv);
+                        ui.set_edit_maxperf(p.max_perf_pct);
+                        ui.set_status_error(false);
+                        ui.set_status(format!("KDE plan '{plan}' - applied '{}'", p.name).into());
+                        *app.dirty.borrow_mut() = false;
+                    }
                 }
 
                 // Never clobber a curve the user is midway through editing.
