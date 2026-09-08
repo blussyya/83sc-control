@@ -128,14 +128,20 @@ export component MainWindow inherits Window {
 
             // profiles
             Rectangle {
-                width: 210px;
+                width: 232px;
                 background: #1a1b1e;
                 border-radius: 8px;
+                // the column has seven widgets in it; without its own scroll the
+                // profile list gets squeezed to a couple of rows
+                ScrollView {
                 VerticalLayout {
                     padding: 10px;
                     spacing: 8px;
                     Text { text: "Profiles"; font-size: 13px; font-weight: 700; color: #e8eaed; }
-                    ListView {
+                    Rectangle {
+                        // explicit height or the ListView collapses to nothing
+                        height: 190px;
+                        ListView {
                         for name[i] in profile-names: Rectangle {
                             height: 32px;
                             background: i == sel-profile ? #2d4263 : transparent;
@@ -152,6 +158,7 @@ export component MainWindow inherits Window {
                                     font-size: 12px;
                                 }
                             }
+                        }
                         }
                     }
                     Button {
@@ -214,6 +221,8 @@ export component MainWindow inherits Window {
                         checked <=> persist;
                         toggled => { set-persist(self.checked); }
                     }
+                    Rectangle { min-height: 6px; }
+                }
                 }
             }
 
