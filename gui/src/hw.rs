@@ -5,6 +5,7 @@ use std::process::Command;
 pub const LEGION: &str = "/sys/bus/platform/devices/PNP0C09:00";
 pub const RAPL: &str = "/sys/class/powercap/intel-rapl:0";
 pub const HELPER: &str = "/usr/local/lib/83sc-control/helper.py";
+pub const PSTATE: &str = "/sys/devices/system/cpu/intel_pstate";
 
 pub const POINTS: usize = 10;
 
@@ -72,6 +73,9 @@ pub struct Telemetry {
     pub gpu_watts: f32,
     pub fan_fullspeed: bool,
     pub minifancurve: bool,
+    pub undervolt_mv: i32,
+    pub max_perf_pct: i32,
+    pub on_battery: bool,
 }
 
 pub struct Hw {
@@ -118,6 +122,9 @@ impl Hw {
         t.tau = read_i32(&format!("{RAPL}/constraint_0_time_window_us")).unwrap_or(0) / 1_000_000;
         t.prochot =
             read_i32("/sys/devices/system/cpu/cpu0/thermal_throttle/package_throttle_count").unwrap_or(0);
+        t.max_perf_pct = read_i32(&format!("{PSTATE}/max_perf_pct")).unwrap_or(100);
+        t.on_battery = read("/sys/class/power_supply/ACAD/online").as_deref() == Some("0");
+        t.undervolt_mv = read_undervolt();
 
         let mut sum = 0i64;
         let mut n = 0i64;
@@ -238,6 +245,44 @@ impl Hw {
         )
     }
 
+    /// Undervolt goes through the helper's dedicated verb rather than a path
+    /// write: it edits /etc/intel-undervolt.conf and invokes the tool, and that
+    /// file is outside the writable sysfs prefixes by design.
+    pub fn set_undervolt(&self, mv: i32) -> Result<(), String> {
+        let out = Command::new("sudo")
+            .args(["-n", HELPER, "undervolt", &mv.abs().to_string()])
+            .output()
+            .map_err(|e| format!("could not run helper: {e}"))?;
+        match out.status.code() {
+            Some(0) => Ok(()),
+            // rc 4 = applied value did not match request; the BIOS UnderVolt
+            // Protection gate silently swallows writes when enabled.
+            Some(4) => Err("offset did not take - check UnderVolt Protection in BIOS".into()),
+            _ => Err(String::from_utf8_lossy(&out.stderr).trim().lines().next()
+                     .unwrap_or("undervolt failed").to_string()),
+        }
+    }
+
+    /// Make the undervolt survive reboot via intel-undervolt's systemd unit.
+    pub fn set_undervolt_persist(&self, on: bool) -> Result<(), String> {
+        let out = Command::new("sudo")
+            .args(["-n", HELPER, "undervolt-persist", if on { "1" } else { "0" }])
+            .output()
+            .map_err(|e| format!("could not run helper: {e}"))?;
+        if out.status.success() {
+            Ok(())
+        } else {
+            Err(String::from_utf8_lossy(&out.stderr).trim().lines().next()
+                .unwrap_or("could not change boot persistence").to_string())
+        }
+    }
+
+    /// Percentage of maximum CPU performance. This is the direct Linux
+    /// equivalent of the Windows power-plan "maximum processor state" percent.
+    pub fn set_max_perf(&self, pct: i32) -> Result<(), String> {
+        write(&format!("{PSTATE}/max_perf_pct"), pct.clamp(10, 100))
+    }
+
     pub fn set_powermode(&self, mode: i32) -> Result<(), String> {
         write(&format!("{LEGION}/powermode"), mode)
     }
@@ -251,6 +296,21 @@ impl Hw {
         std::thread::sleep(std::time::Duration::from_millis(1800));
         write(&format!("{LEGION}/powermode"), cur)
     }
+}
+
+/// Current core undervolt offset in mV, as a positive magnitude (0 = none).
+pub fn read_undervolt() -> i32 {
+    let out = match Command::new("intel-undervolt").arg("read").output() {
+        Ok(o) => String::from_utf8_lossy(&o.stdout).to_string(),
+        Err(_) => return 0,
+    };
+    for line in out.lines() {
+        if let Some(rest) = line.strip_prefix("CPU (0): ") {
+            let v: f32 = rest.trim_end_matches(" mV").trim().parse().unwrap_or(0.0);
+            return v.abs().round() as i32;
+        }
+    }
+    0
 }
 
 pub fn pwm_to_rpm(pwm: i32, max_rpm: i32) -> i32 {

@@ -19,6 +19,9 @@ export struct Stats {
     powermode: int,
     mode-name: string,
     prochot: int,
+    undervolt-mv: int,
+    max-perf-pct: int,
+    on-battery: bool,
 }
 
 component Stat inherits Rectangle {
@@ -59,6 +62,10 @@ export component MainWindow inherits Window {
     in-out property <int> edit-ctgp;
     in-out property <int> edit-ppab;
     in-out property <int> bind-mode: 0;
+    in-out property <int> edit-uv;
+    in-out property <int> edit-maxperf: 100;
+    in-out property <bool> persist;
+    in-out property <int> bind-power: 0;
 
     callback apply-curve();
     callback apply-power();
@@ -71,6 +78,10 @@ export component MainWindow inherits Window {
     callback restore-stock();
     callback bind-profile(int, int);
     callback point-changed(int, int, int);
+    callback apply-undervolt();
+    callback apply-maxperf();
+    callback set-persist(bool);
+    callback bind-power-source(int, int);
 
     VerticalBox {
         padding: 14px;
@@ -89,6 +100,10 @@ export component MainWindow inherits Window {
             Stat { label: "PROCHOT"; value: stats.prochot;
                    tint: stats.prochot > 0 ? #f28b82 : #81c995; }
             Stat { label: "MODE"; value: stats.mode-name; tint: #fdd663; }
+            Stat { label: "UNDERVOLT"; value: "-" + stats.undervolt-mv + " mV";
+                   tint: stats.undervolt-mv > 0 ? #81c995 : #9aa0a6; }
+            Stat { label: stats.on-battery ? "BATTERY" : "AC"; value: stats.max-perf-pct + "% cpu";
+                   tint: stats.on-battery ? #fdd663 : #8ab4f8; }
         }
 
         if !hw-ok: Rectangle {
@@ -170,6 +185,27 @@ export component MainWindow inherits Window {
                     Button {
                         text: "Bind";
                         clicked => { bind-profile(sel-profile, mode-box.current-index); }
+                    }
+
+                    Rectangle { height: 1px; background: #2a2b2e; }
+
+                    Text { text: "Run this profile when"; font-size: 11px; color: #9aa0a6; }
+                    power-box := ComboBox {
+                        model: ["(never)", "on battery", "on AC"];
+                        current-index: bind-power;
+                        selected => { bind-power = self.current-index; }
+                    }
+                    Button {
+                        text: "Bind to power source";
+                        clicked => { bind-power-source(sel-profile, power-box.current-index); }
+                    }
+
+                    Rectangle { height: 1px; background: #2a2b2e; }
+
+                    CheckBox {
+                        text: "Re-apply at boot";
+                        checked <=> persist;
+                        toggled => { set-persist(self.checked); }
                     }
                 }
             }
@@ -376,6 +412,65 @@ export component MainWindow inherits Window {
                                     text: "Apply GPU limits";
                                     enabled: hw-ok;
                                     clicked => { apply-gpu(); }
+                                }
+                            }
+                        }
+
+                        GroupBox {
+                            title: "Undervolt";
+                            VerticalLayout {
+                                spacing: 10px;
+                                HorizontalLayout {
+                                    spacing: 10px;
+                                    Text { text: "Core + cache offset"; width: 150px; color: #e8eaed;
+                                           vertical-alignment: center; font-size: 12px; }
+                                    Slider {
+                                        minimum: 0; maximum: 150; value: edit-uv;
+                                        changed(v) => { edit-uv = round(v / 25) * 25; }
+                                    }
+                                    Text { text: "-" + edit-uv + " mV"; width: 62px; color: #81c995;
+                                           vertical-alignment: center; font-weight: 700; }
+                                }
+                                Text {
+                                    text: "Measured here at PL1 55 W: -100 mV gave +302 MHz, 6 C cooler and "
+                                        + "4 W less, because this chip is thermally limited rather than power "
+                                        + "limited. Below -125 mV can be unstable, and instability is not "
+                                        + "always a clean crash.";
+                                    font-size: 11px; color: #9aa0a6; wrap: word-wrap;
+                                }
+                                Button {
+                                    text: "Apply undervolt";
+                                    primary: true;
+                                    enabled: hw-ok;
+                                    clicked => { apply-undervolt(); }
+                                }
+                            }
+                        }
+
+                        GroupBox {
+                            title: "CPU ceiling";
+                            VerticalLayout {
+                                spacing: 10px;
+                                HorizontalLayout {
+                                    spacing: 10px;
+                                    Text { text: "Max performance"; width: 150px; color: #e8eaed;
+                                           vertical-alignment: center; font-size: 12px; }
+                                    Slider {
+                                        minimum: 10; maximum: 100; value: edit-maxperf;
+                                        changed(v) => { edit-maxperf = round(v); }
+                                    }
+                                    Text { text: edit-maxperf + " %"; width: 62px; color: #8ab4f8;
+                                           vertical-alignment: center; font-weight: 700; }
+                                }
+                                Text {
+                                    text: "Same knob as the Windows power plan 'maximum processor state'. "
+                                        + "35% on battery matches that setting exactly.";
+                                    font-size: 11px; color: #9aa0a6; wrap: word-wrap;
+                                }
+                                Button {
+                                    text: "Apply CPU ceiling";
+                                    enabled: hw-ok;
+                                    clicked => { apply-maxperf(); }
                                 }
                             }
                         }

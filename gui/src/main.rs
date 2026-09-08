@@ -57,6 +57,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let (ctgp, ppab) = app.hw.gpu_limits();
     ui.set_edit_ctgp(ctgp);
     ui.set_edit_ppab(ppab);
+    ui.set_edit_uv(t0.undervolt_mv);
+    ui.set_edit_maxperf(if t0.max_perf_pct > 0 { t0.max_perf_pct } else { 100 });
+    ui.set_persist(app.cfg.borrow().persist);
 
     *app.draft.borrow_mut() = app.hw.read_curve();
     ui.set_curve(to_curve_model(&app.draft.borrow()));
@@ -161,6 +164,101 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     });
 
+    ui.on_apply_undervolt({
+        let app = app.clone();
+        let w = ui.as_weak();
+        move || {
+            let ui = w.unwrap();
+            let mv = ui.get_edit_uv();
+            match app.hw.set_undervolt(mv) {
+                Ok(()) => {
+                    ui.set_status_error(false);
+                    ui.set_status(if mv > 0 {
+                        format!("undervolt -{mv} mV applied - not persistent until 'Re-apply at boot'").into()
+                    } else {
+                        SharedString::from("undervolt disabled")
+                    });
+                }
+                Err(e) => { ui.set_status_error(true); ui.set_status(e.into()); }
+            }
+        }
+    });
+
+    ui.on_apply_maxperf({
+        let app = app.clone();
+        let w = ui.as_weak();
+        move || {
+            let ui = w.unwrap();
+            let pct = ui.get_edit_maxperf();
+            match app.hw.set_max_perf(pct) {
+                Ok(()) => {
+                    ui.set_status_error(false);
+                    ui.set_status(format!("CPU ceiling set to {pct}%").into());
+                }
+                Err(e) => { ui.set_status_error(true); ui.set_status(e.into()); }
+            }
+        }
+    });
+
+    ui.on_set_persist({
+        let app = app.clone();
+        let w = ui.as_weak();
+        move |on| {
+            let ui = w.unwrap();
+            app.cfg.borrow_mut().persist = on;
+            let _ = profiles::save(&app.cfg.borrow());
+            // Power limits and the fan curve already persist via
+            // 83sc-thermal.service; the undervolt needs its own unit enabled.
+            match app.hw.set_undervolt_persist(on) {
+                Ok(()) => {
+                    ui.set_status_error(false);
+                    ui.set_status(if on {
+                        SharedString::from("undervolt will re-apply at boot")
+                    } else {
+                        SharedString::from("undervolt will not re-apply at boot")
+                    });
+                }
+                Err(e) => { ui.set_status_error(true); ui.set_status(e.into()); }
+            }
+        }
+    });
+
+    ui.on_bind_power_source({
+        let app = app.clone();
+        let w = ui.as_weak();
+        let refresh = refresh_profiles.clone();
+        move |idx, which| {
+            let ui = w.unwrap();
+            let name = match app.cfg.borrow().profiles.get(idx as usize) {
+                Some(p) => p.name.clone(),
+                None => return,
+            };
+            {
+                let mut cfg = app.cfg.borrow_mut();
+                // a profile can only be bound to one source at a time
+                if cfg.on_battery_profile.as_deref() == Some(name.as_str()) {
+                    cfg.on_battery_profile = None;
+                }
+                if cfg.on_ac_profile.as_deref() == Some(name.as_str()) {
+                    cfg.on_ac_profile = None;
+                }
+                match which {
+                    1 => cfg.on_battery_profile = Some(name.clone()),
+                    2 => cfg.on_ac_profile = Some(name.clone()),
+                    _ => {}
+                }
+                let _ = profiles::save(&cfg);
+            }
+            refresh(&ui);
+            ui.set_status_error(false);
+            ui.set_status(match which {
+                1 => format!("'{name}' will apply on battery").into(),
+                2 => format!("'{name}' will apply on AC").into(),
+                _ => SharedString::from(format!("power-source binding cleared for '{name}'")),
+            });
+        }
+    });
+
     ui.on_set_powermode({
         let app = app.clone();
         let w = ui.as_weak();
@@ -219,6 +317,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 ui.set_edit_pl1(p.pl1);
                 ui.set_edit_pl2(p.pl2);
                 ui.set_edit_tau(p.tau);
+                ui.set_edit_uv(p.undervolt_mv);
+                ui.set_edit_maxperf(p.max_perf_pct);
                 *app.dirty.borrow_mut() = true;
                 ui.set_status_error(false);
                 ui.set_status(format!("loaded '{}' — not applied yet", p.name).into());
@@ -245,6 +345,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 std::thread::sleep(std::time::Duration::from_millis(600));
             }
             errs.extend(app.hw.set_power(p.pl1, p.pl2, p.tau));
+            if let Err(e) = app.hw.set_undervolt(p.undervolt_mv) {
+                errs.push(e);
+            }
+            if let Err(e) = app.hw.set_max_perf(p.max_perf_pct) {
+                errs.push(e);
+            }
             errs.extend(app.hw.write_curve(&p.curve));
 
             let live = app.hw.read_curve();
@@ -253,6 +359,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             ui.set_edit_pl1(p.pl1);
             ui.set_edit_pl2(p.pl2);
             ui.set_edit_tau(p.tau);
+            ui.set_edit_uv(p.undervolt_mv);
+            ui.set_edit_maxperf(p.max_perf_pct);
             *app.dirty.borrow_mut() = false;
             report(&ui, &errs, &format!("applied '{}'", p.name));
         }
@@ -272,6 +380,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 pl2: ui.get_edit_pl2(),
                 tau: ui.get_edit_tau(),
                 powermode: 0,
+                undervolt_mv: ui.get_edit_uv(),
+                max_perf_pct: ui.get_edit_maxperf(),
                 builtin: false,
             };
             {
@@ -365,6 +475,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         // transition. Otherwise a profile bound to the mode you are already in
         // never fires, because there is no change to detect.
         let mut last_mode = i32::MIN;
+        // None so the first tick counts as a transition and applies the binding
+        let mut last_batt: Option<bool> = None;
         timer.start(
             slint::TimerMode::Repeated,
             std::time::Duration::from_millis(1500),
@@ -387,6 +499,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     powermode: t.powermode,
                     mode_name: profiles::mode_name(t.powermode).into(),
                     prochot: t.prochot,
+                    undervolt_mv: t.undervolt_mv,
+                    max_perf_pct: t.max_perf_pct,
+                    on_battery: t.on_battery,
                 });
 
                 // A power mode change outside this app (keyboard shortcut,
@@ -411,6 +526,39 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             ui.set_edit_tau(p.tau);
                             ui.set_status_error(false);
                             ui.set_status(format!("mode changed — applied '{}'", p.name).into());
+                        }
+                    }
+                    *app.dirty.borrow_mut() = false;
+                }
+
+                // Charger plugged or unplugged: apply whichever profile is bound
+                // to the new power source. Watches the sysfs AC node directly
+                // rather than PowerDevil, so it works regardless of desktop.
+                if last_batt != Some(t.on_battery) {
+                    last_batt = Some(t.on_battery);
+                    let want = {
+                        let cfg = app.cfg.borrow();
+                        if t.on_battery { cfg.on_battery_profile.clone() } else { cfg.on_ac_profile.clone() }
+                    };
+                    if let Some(name) = want {
+                        let p = app.cfg.borrow().profiles.iter().find(|p| p.name == name).cloned();
+                        if let Some(p) = p {
+                            if p.powermode != 0 {
+                                let _ = app.hw.set_powermode(p.powermode);
+                                std::thread::sleep(std::time::Duration::from_millis(600));
+                            }
+                            app.hw.set_power(p.pl1, p.pl2, p.tau);
+                            let _ = app.hw.set_undervolt(p.undervolt_mv);
+                            let _ = app.hw.set_max_perf(p.max_perf_pct);
+                            app.hw.write_curve(&p.curve);
+                            ui.set_edit_pl1(p.pl1);
+                            ui.set_edit_pl2(p.pl2);
+                            ui.set_edit_tau(p.tau);
+                            ui.set_edit_uv(p.undervolt_mv);
+                            ui.set_edit_maxperf(p.max_perf_pct);
+                            ui.set_status_error(false);
+                            ui.set_status(format!("{} - applied '{}'",
+                                if t.on_battery { "on battery" } else { "on AC" }, p.name).into());
                         }
                     }
                     *app.dirty.borrow_mut() = false;

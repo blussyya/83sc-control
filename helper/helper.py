@@ -234,6 +234,17 @@ def cmd_status():
     out["thermal"] = {k: read(f"{tt}/{k}") for k in
                       ("core_throttle_count", "core_throttle_total_time_ms",
                        "package_throttle_count", "package_throttle_total_time_ms")}
+    uv = None
+    try:
+        r = subprocess.run(["/usr/bin/intel-undervolt", "read"], capture_output=True, text=True)
+        m = re.search(r"^CPU \(0\): *(-?[\d.]+) mV", r.stdout or "", re.M)
+        if m:
+            uv = float(m.group(1))
+    except OSError:
+        pass
+    out["undervolt_mv"] = uv
+    out["on_battery"] = read("/sys/class/power_supply/ACAD/online") == "0"
+
     ct = hwmon("coretemp")
     if ct:
         out["thermal"]["package_temp_mc"] = read(f"{ct}/temp1_input")
@@ -443,6 +454,77 @@ def cmd_gpu_hotspot(argv):
     out["plausible"] = 15.0 <= celsius <= 125.0
     print(json.dumps(out))
 
+UNDERVOLT_CONF = "/etc/intel-undervolt.conf"
+
+
+def cmd_undervolt(argv):
+    """Apply a core+cache undervolt offset in millivolts.
+
+    Core and cache share a voltage rail on this part, so offsetting core alone
+    leaves the cache domain holding the floor and nothing moves. They are always
+    written together.
+
+    Measured on the 83SC at PL1 55 W: -100 mV gave +302 MHz, 6 C cooler, 4 W
+    less, because the chip is thermally limited rather than power limited.
+    """
+    if not argv:
+        die("usage: undervolt <mv>   (0 = off, positive number means that many mV lower)")
+    mv = argv[0].lstrip("-")
+    if not re.fullmatch(r"\d{1,3}", mv):
+        die("offset must be 0-200 (millivolts, unsigned)")
+    mv = int(mv)
+    if mv > 200:
+        die("refusing offsets beyond 200 mV")
+    if not os.path.exists(UNDERVOLT_CONF):
+        die(f"{UNDERVOLT_CONF} not found (install intel-undervolt)")
+    exe = "/usr/bin/intel-undervolt"
+    if not os.path.exists(exe):
+        die("intel-undervolt not installed")
+
+    with open(UNDERVOLT_CONF) as f:
+        conf = f.read()
+    conf = re.sub(r"^enable .*$", "enable yes" if mv else "enable no", conf, flags=re.M)
+    conf = re.sub(r"^undervolt 0 'CPU' .*$", f"undervolt 0 'CPU' -{mv}", conf, flags=re.M)
+    conf = re.sub(r"^undervolt 2 'CPU Cache' .*$", f"undervolt 2 'CPU Cache' -{mv}", conf, flags=re.M)
+    with open(UNDERVOLT_CONF, "w") as f:
+        f.write(conf)
+
+    r = subprocess.run([exe, "apply"], capture_output=True, text=True)
+    rb = subprocess.run([exe, "read"], capture_output=True, text=True)
+    applied = None
+    m = re.search(r"^CPU \(0\): *(-?[\d.]+) mV", rb.stdout or "", re.M)
+    if m:
+        applied = float(m.group(1))
+    print(json.dumps({"requested_mv": -mv, "applied_mv": applied,
+                      "rc": r.returncode, "output": (r.stdout or "").strip()[:300]}))
+    # The mailbox silently ignores writes when UnderVolt Protection is enabled in
+    # BIOS, so verify rather than trust the return code.
+    if mv and (applied is None or abs(applied) < mv * 0.8):
+        print("helper: WARNING offset did not take - check UnderVolt Protection in BIOS",
+              file=sys.stderr)
+        return 4
+    return 0
+
+
+def cmd_undervolt_persist(argv):
+    """Enable or disable the undervolt surviving reboot.
+
+    Uses intel-undervolt's own systemd unit rather than a bespoke mechanism, so
+    the offset written by 'undervolt' is what gets re-applied at boot.
+    """
+    if not argv or argv[0] not in ("0", "1"):
+        die("usage: undervolt-persist <0|1>")
+    on = argv[0] == "1"
+    unit = "intel-undervolt.service"
+    action = "enable" if on else "disable"
+    r = subprocess.run(["systemctl", action, unit], capture_output=True, text=True)
+    en = subprocess.run(["systemctl", "is-enabled", unit], capture_output=True, text=True)
+    print(json.dumps({"unit": unit, "action": action, "rc": r.returncode,
+                      "is_enabled": en.stdout.strip(),
+                      "error": r.stderr.strip()[:200]}))
+    return 0 if r.returncode == 0 else 3
+
+
 def cmd_dump_legion(argv):
     allowed = {"ecmemory", "ecmemoryram", "fancurve"}
     name = argv[0] if argv else "ecmemory"
@@ -510,6 +592,8 @@ def main():
         "msr": lambda: cmd_msr(rest), "msr-write": lambda: cmd_msr_write(rest),
         "dump-ec": lambda: cmd_dump_ec(), "ec-write": lambda: cmd_ec_write(rest),
         "dump-legion": lambda: cmd_dump_legion(rest),
+        "undervolt": lambda: cmd_undervolt(rest),
+        "undervolt-persist": lambda: cmd_undervolt_persist(rest),
         "gpu-hotspot": lambda: cmd_gpu_hotspot(rest),
         "acpidump": lambda: cmd_acpidump(rest), "modprobe": lambda: cmd_modprobe(rest),
     }
