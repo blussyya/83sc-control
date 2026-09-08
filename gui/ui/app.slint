@@ -30,20 +30,22 @@ component Stat inherits Rectangle {
     in property <color> tint: #8ab4f8;
     background: #1e1f22;
     border-radius: 6px;
-    min-width: 104px;
-    height: 54px;
+    min-width: 84px;
+    height: 46px;
     VerticalLayout {
         padding: 8px;
         spacing: 2px;
-        Text { text: label; font-size: 10px; color: #9aa0a6; }
-        Text { text: value; font-size: 17px; font-weight: 700; color: tint; }
+        Text { text: label; font-size: 9px; color: #9aa0a6; }
+        Text { text: value; font-size: 14px; font-weight: 700; color: tint; }
     }
 }
 
 export component MainWindow inherits Window {
     title: "83SC Control";
-    min-width: 900px;
-    min-height: 620px;
+    min-width: 820px;
+    min-height: 520px;
+    preferred-height: 640px;
+    preferred-width: 980px;
     background: #141517;
 
     in property <Stats> stats;
@@ -87,9 +89,9 @@ export component MainWindow inherits Window {
         padding: 14px;
         spacing: 12px;
 
-        // live telemetry strip
+        // live telemetry, two rows so the window is not forced 1000px wide
         HorizontalLayout {
-            spacing: 8px;
+            spacing: 6px;
             Stat { label: "CPU"; value: stats.cpu-temp + "°C";
                    tint: stats.cpu-temp >= 90 ? #f28b82 : stats.cpu-temp >= 80 ? #fdd663 : #81c995; }
             Stat { label: "CPU CLOCK"; value: stats.cpu-mhz + " MHz"; }
@@ -99,11 +101,16 @@ export component MainWindow inherits Window {
             Stat { label: "POWER LIMIT"; value: stats.pl1 + " / " + stats.pl2 + " W"; }
             Stat { label: "PROCHOT"; value: stats.prochot;
                    tint: stats.prochot > 0 ? #f28b82 : #81c995; }
+        }
+        HorizontalLayout {
+            spacing: 6px;
             Stat { label: "MODE"; value: stats.mode-name; tint: #fdd663; }
-            Stat { label: "UNDERVOLT"; value: "-" + stats.undervolt-mv + " mV";
-                   tint: stats.undervolt-mv > 0 ? #81c995 : #9aa0a6; }
+            Stat { label: "VOLTAGE"; value: stats.undervolt-mv + " mV";
+                   tint: stats.undervolt-mv != 0 ? #81c995 : #9aa0a6; }
             Stat { label: stats.on-battery ? "BATTERY" : "AC"; value: stats.max-perf-pct + "% cpu";
                    tint: stats.on-battery ? #fdd663 : #8ab4f8; }
+            Stat { label: "TAU"; value: stats.tau + " s"; }
+            Rectangle { }
         }
 
         if !hw-ok: Rectangle {
@@ -321,7 +328,8 @@ export component MainWindow inherits Window {
 
                 Tab {
                     title: "Power";
-                    VerticalBox {
+                    ScrollView {
+                    VerticalLayout {
                         padding: 12px;
                         spacing: 14px;
 
@@ -425,21 +433,26 @@ export component MainWindow inherits Window {
                                     Text { text: "Core + cache offset"; width: 150px; color: #e8eaed;
                                            vertical-alignment: center; font-size: 12px; }
                                     Slider {
-                                        minimum: 0; maximum: 150; value: edit-uv;
-                                        changed(v) => { edit-uv = round(v / 25) * 25; }
+                                        minimum: -150; maximum: 50; value: edit-uv;
+                                        changed(v) => { edit-uv = round(v / 5) * 5; }
                                     }
-                                    Text { text: "-" + edit-uv + " mV"; width: 62px; color: #81c995;
+                                    Text { text: edit-uv + " mV"; width: 66px;
+                                           color: edit-uv > 0 ? #f28b82 : #81c995;
                                            vertical-alignment: center; font-weight: 700; }
                                 }
                                 Text {
-                                    text: "Measured here at PL1 55 W: -100 mV gave +302 MHz, 6 C cooler and "
-                                        + "4 W less, because this chip is thermally limited rather than power "
-                                        + "limited. Below -125 mV can be unstable, and instability is not "
-                                        + "always a clean crash.";
+                                    text: edit-uv > 0
+                                        ? "POSITIVE IS OVERVOLT. It raises voltage, heat and wear. Only useful "
+                                          + "to stabilise an overclock, and this chip has CPU overclocking "
+                                          + "disabled in firmware, so there is nothing here for it to buy."
+                                        : "Measured here at PL1 55 W: -100 mV gave +302 MHz, 6 C cooler and "
+                                          + "4 W less, because this chip is thermally limited rather than power "
+                                          + "limited. Below -125 mV can be unstable, and instability is not "
+                                          + "always a clean crash.";
                                     font-size: 11px; color: #9aa0a6; wrap: word-wrap;
                                 }
                                 Button {
-                                    text: "Apply undervolt";
+                                    text: edit-uv > 0 ? "Apply OVERVOLT" : "Apply undervolt";
                                     primary: true;
                                     enabled: hw-ok;
                                     clicked => { apply-undervolt(); }
@@ -486,6 +499,8 @@ export component MainWindow inherits Window {
                                 Button { text: "Custom"; clicked => { set-powermode(255); } }
                             }
                         }
+                        Rectangle { min-height: 8px; }
+                    }
                     }
                 }
             }

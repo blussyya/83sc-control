@@ -468,13 +468,20 @@ def cmd_undervolt(argv):
     less, because the chip is thermally limited rather than power limited.
     """
     if not argv:
-        die("usage: undervolt <mv>   (0 = off, positive number means that many mV lower)")
-    mv = argv[0].lstrip("-")
-    if not re.fullmatch(r"\d{1,3}", mv):
-        die("offset must be 0-200 (millivolts, unsigned)")
-    mv = int(mv)
-    if mv > 200:
-        die("refusing offsets beyond 200 mV")
+        die("usage: undervolt <mv>   (negative = undervolt, positive = overvolt, 0 = off)")
+    raw = argv[0]
+    if not re.fullmatch(r"[+-]?\d{1,3}", raw):
+        die("offset must be a signed millivolt value, e.g. -100 or +25")
+    off = int(raw)
+    # Undervolting is bounded by stability; overvolting is bounded by damage, so
+    # the positive side is capped far tighter.
+    if off < -250:
+        die("refusing undervolt beyond -250 mV")
+    if off > 50:
+        die("refusing overvolt beyond +50 mV - raising core voltage accelerates "
+            "electromigration and this chip has CPU overclocking disabled in "
+            "firmware, so there is no clock headroom for it to buy")
+    mv = off
     if not os.path.exists(UNDERVOLT_CONF):
         die(f"{UNDERVOLT_CONF} not found (install intel-undervolt)")
     exe = "/usr/bin/intel-undervolt"
@@ -484,8 +491,8 @@ def cmd_undervolt(argv):
     with open(UNDERVOLT_CONF) as f:
         conf = f.read()
     conf = re.sub(r"^enable .*$", "enable yes" if mv else "enable no", conf, flags=re.M)
-    conf = re.sub(r"^undervolt 0 'CPU' .*$", f"undervolt 0 'CPU' -{mv}", conf, flags=re.M)
-    conf = re.sub(r"^undervolt 2 'CPU Cache' .*$", f"undervolt 2 'CPU Cache' -{mv}", conf, flags=re.M)
+    conf = re.sub(r"^undervolt 0 'CPU' .*$", f"undervolt 0 'CPU' {mv}", conf, flags=re.M)
+    conf = re.sub(r"^undervolt 2 'CPU Cache' .*$", f"undervolt 2 'CPU Cache' {mv}", conf, flags=re.M)
     with open(UNDERVOLT_CONF, "w") as f:
         f.write(conf)
 
@@ -495,11 +502,11 @@ def cmd_undervolt(argv):
     m = re.search(r"^CPU \(0\): *(-?[\d.]+) mV", rb.stdout or "", re.M)
     if m:
         applied = float(m.group(1))
-    print(json.dumps({"requested_mv": -mv, "applied_mv": applied,
+    print(json.dumps({"requested_mv": mv, "applied_mv": applied,
                       "rc": r.returncode, "output": (r.stdout or "").strip()[:300]}))
     # The mailbox silently ignores writes when UnderVolt Protection is enabled in
     # BIOS, so verify rather than trust the return code.
-    if mv and (applied is None or abs(applied) < mv * 0.8):
+    if mv and (applied is None or abs(applied) < abs(mv) * 0.8):
         print("helper: WARNING offset did not take - check UnderVolt Protection in BIOS",
               file=sys.stderr)
         return 4

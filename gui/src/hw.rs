@@ -250,7 +250,7 @@ impl Hw {
     /// file is outside the writable sysfs prefixes by design.
     pub fn set_undervolt(&self, mv: i32) -> Result<(), String> {
         let out = Command::new("sudo")
-            .args(["-n", HELPER, "undervolt", &mv.abs().to_string()])
+            .args(["-n", HELPER, "undervolt", &mv.to_string()])
             .output()
             .map_err(|e| format!("could not run helper: {e}"))?;
         match out.status.code() {
@@ -307,7 +307,8 @@ pub fn read_undervolt() -> i32 {
     for line in out.lines() {
         if let Some(rest) = line.strip_prefix("CPU (0): ") {
             let v: f32 = rest.trim_end_matches(" mV").trim().parse().unwrap_or(0.0);
-            return v.abs().round() as i32;
+            // keep the sign: negative is undervolt, positive is overvolt
+            return v.round() as i32;
         }
     }
     0

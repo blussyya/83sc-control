@@ -14,7 +14,7 @@ pub struct Profile {
     /// 1 quiet, 2 balanced, 3 performance, 224 extreme, 255 custom.
     /// 0 means leave the current mode alone.
     pub powermode: i32,
-    /// Core+cache undervolt in mV as a positive magnitude. 0 = none.
+    /// Signed core+cache voltage offset in mV. Negative undervolts, 0 = none.
     #[serde(default)]
     pub undervolt_mv: i32,
     /// Percentage of maximum CPU performance -- the Linux equivalent of the
@@ -52,35 +52,35 @@ pub fn builtins() -> Vec<Profile> {
             curve: vec![(55, 1000), (62, 1300), (68, 1600), (72, 2000), (76, 2400),
                         (80, 2900), (84, 3400), (87, 3900), (90, 4300), (94, 4300)],
             pl1: 30, pl2: 55, tau: 8, powermode: 1,
-            undervolt_mv: 100, max_perf_pct: 100, builtin: true,
+            undervolt_mv: -100, max_perf_pct: 100, builtin: true,
         },
         Profile {
             name: "Balanced".into(),
             curve: vec![(50, 1200), (55, 1500), (60, 1900), (65, 2300), (70, 2700),
                         (75, 3100), (80, 3500), (85, 3900), (88, 4300), (92, 4300)],
             pl1: 40, pl2: 75, tau: 8, powermode: 2,
-            undervolt_mv: 100, max_perf_pct: 100, builtin: true,
+            undervolt_mv: -100, max_perf_pct: 100, builtin: true,
         },
         Profile {
             name: "Gaming".into(),
             curve: vec![(45, 1500), (50, 2000), (55, 2500), (60, 3000), (65, 3400),
                         (70, 3800), (75, 4100), (80, 4300), (85, 4300), (90, 4300)],
             pl1: 55, pl2: 90, tau: 8, powermode: 255,
-            undervolt_mv: 100, max_perf_pct: 100, builtin: true,
+            undervolt_mv: -100, max_perf_pct: 100, builtin: true,
         },
         Profile {
             name: "Max cooling".into(),
             curve: vec![(40, 2000), (45, 2600), (50, 3200), (55, 3700), (60, 4100),
                         (65, 4300), (70, 4300), (75, 4300), (80, 4300), (85, 4300)],
             pl1: 45, pl2: 90, tau: 8, powermode: 255,
-            undervolt_mv: 100, max_perf_pct: 100, builtin: true,
+            undervolt_mv: -100, max_perf_pct: 100, builtin: true,
         },
         Profile {
             name: "Battery".into(),
             curve: vec![(60, 0), (68, 1600), (74, 2000), (78, 2500), (82, 3000),
                         (86, 3400), (89, 3800), (92, 4300), (94, 4300), (96, 4300)],
             pl1: 20, pl2: 35, tau: 12, powermode: 1,
-            undervolt_mv: 100, max_perf_pct: 35, builtin: true,
+            undervolt_mv: -100, max_perf_pct: 35, builtin: true,
         },
     ]
 }

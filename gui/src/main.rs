@@ -173,10 +173,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             match app.hw.set_undervolt(mv) {
                 Ok(()) => {
                     ui.set_status_error(false);
-                    ui.set_status(if mv > 0 {
-                        format!("undervolt -{mv} mV applied - not persistent until 'Re-apply at boot'").into()
-                    } else {
-                        SharedString::from("undervolt disabled")
+                    ui.set_status(match mv {
+                        0 => SharedString::from("voltage offset cleared"),
+                        m if m < 0 => format!("{m} mV applied - not persistent until 'Re-apply at boot'").into(),
+                        m => format!("+{m} mV OVERVOLT applied - raises heat and wear").into(),
                     });
                 }
                 Err(e) => { ui.set_status_error(true); ui.set_status(e.into()); }
