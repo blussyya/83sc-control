@@ -9,3 +9,7 @@ harness/gpuburn
 readme.txt
 gui/target/
 kbd-idle/target/
+# vendor BIOS / firmware blobs (kept locally for EC analysis, not redistributed)
+*.exe
+secn*.txt
+bios_tool_*.7z
