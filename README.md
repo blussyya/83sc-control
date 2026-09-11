@@ -29,6 +29,10 @@ git clone https://github.com/blussyya/83sc-control.git
 cd 83sc-control && ./setup.sh
 ```
 
+> If you get `Permission denied`, run `bash setup.sh` — and tell me, because it means
+> the executable bit is missing from the repo again (this project is developed on an
+> exFAT drive, which cannot store it).
+
 Run it as yourself — it re-invokes itself with sudo for the privileged parts and drops
 back to your session for the user service. It is idempotent, so re-run it any time
 (after a kernel upgrade, say). It installs:
