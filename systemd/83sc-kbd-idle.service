@@ -4,7 +4,7 @@ PartOf=graphical-session.target
 After=graphical-session.target
 
 [Service]
-ExecStart=/usr/local/bin/83sc-kbd-idle
+ExecStart=%h/.local/bin/83sc-kbd-idle
 Restart=on-failure
 RestartSec=3
 
