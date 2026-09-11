@@ -20,13 +20,42 @@ combined CPU+GPU load.
 
 The fix lives in Intel's mainline `intel_rapl` driver, not in any Lenovo driver.
 
-## Persistent fix
+## Install
+
+One command, from a fresh clone:
 
 ```bash
-sudo install -Dm755 systemd/83sc-thermal.sh /usr/local/lib/83sc-control/83sc-thermal.sh
-sudo install -Dm644 systemd/83sc-thermal.service /etc/systemd/system/83sc-thermal.service
-sudo systemctl enable --now 83sc-thermal.service
+git clone https://github.com/blussyya/83sc-control.git
+cd 83sc-control && ./setup.sh
 ```
+
+Run it as yourself — it re-invokes itself with sudo for the privileged parts and drops
+back to your session for the user service. It is idempotent, so re-run it any time
+(after a kernel upgrade, say). It installs:
+
+1. the privileged helper and a sudoers rule scoped to exactly that one file
+2. the CLI tools (`83sc`, `83sc-diag`, `83sc-fan`, `83sc-snap`)
+3. the patched `legion_laptop` via DKMS — skipped if your kernel already ships
+   `legion-laptop` ≥ `v0.0.26`, which carries these fixes upstream
+4. `83sc-thermal.service` (replays power limits, undervolt and fan curve at boot) and
+   `83sc-driver-guard.service` (see below)
+5. the GUI — `83SC Control` in your app menu
+6. the keyboard idle dimmer (`83sc-kbd-idle`, backlight off after 5 s idle)
+
+It verifies the result at the end and tells you what, if anything, did not apply.
+
+To undo: `./setup.sh --remove` (keeps `/etc/83sc-control` so your profiles survive).
+
+### Why there is a driver guard
+
+The distro package registers its own DKMS module built from a pre-fix commit. Both
+produce the same `legion-laptop.ko`, so on a kernel upgrade whichever DKMS installs last
+wins — silently. When the stock one wins, the phantom fan2 returns, fan curve writes
+fail and the temperature points read back 0. `83sc-driver-guard` detects that by its
+symptoms and repairs it, at boot and (on Arch-likes) immediately post-upgrade. It stands
+down on its own once the packaged module carries the fixes.
+
+See [docs/PORTABILITY.md](docs/PORTABILITY.md) for kernel upgrades and moving distro.
 
 Edit the values at the top of `83sc-thermal.sh` (plain watts and seconds).
 

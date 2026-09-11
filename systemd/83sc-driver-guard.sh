@@ -60,6 +60,19 @@ log "reloading legion_laptop"
 modprobe -r legion_laptop 2>/dev/null || true
 modprobe legion_laptop 2>/dev/null || { log "modprobe failed"; exit 1; }
 
+# Reloading the module invalidates UPower's handle on the keyboard LED, which
+# leaves the idle dimmer reporting "error reading brightness" until UPower is
+# restarted. Same for the fan curve: it must be re-applied after the swap.
+if systemctl is-active --quiet upower 2>/dev/null; then
+    log "restarting upower (module reload orphans its keyboard-LED handle)"
+    systemctl restart upower 2>/dev/null || true
+fi
+for u in /run/user/*; do
+    uid=${u##*/}
+    [[ -S "$u/bus" ]] || continue
+    systemctl --user --machine="$uid@" restart 83sc-kbd-idle 2>/dev/null || true
+done
+
 if is_patched; then
     log "repaired: patched module now active"
     exit 0
