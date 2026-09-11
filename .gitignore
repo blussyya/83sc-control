@@ -8,3 +8,4 @@ __pycache__/
 harness/gpuburn
 readme.txt
 gui/target/
+kbd-idle/target/

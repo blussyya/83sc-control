@@ -1,0 +1,19 @@
+[package]
+name = "legion83-kbd-idle"
+version = "0.1.0"
+edition = "2021"
+description = "Turn the keyboard backlight off after a period of no input, back on at the first keypress or mouse move"
+
+[[bin]]
+name = "83sc-kbd-idle"
+path = "src/main.rs"
+
+[dependencies]
+wayland-client = "0.31"
+wayland-protocols = { version = "0.32", features = ["client", "staging"] }
+zbus = "5"
+libc = "0.2"
+
+[profile.release]
+opt-level = 2
+strip = true
