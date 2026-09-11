@@ -1,0 +1,19 @@
+# Arch/CachyOS: re-assert the patched legion_laptop immediately after anything
+# that could re-register the distro's competing DKMS module (a kernel update,
+# a dkms update, or the lenovolegionlinux package itself).
+[Trigger]
+Operation = Install
+Operation = Upgrade
+Operation = Remove
+Type = Package
+Target = lenovolegionlinux
+Target = linux
+Target = linux-lts
+Target = linux-cachyos*
+Target = dkms
+
+[Action]
+Description = Ensuring patched legion_laptop (83sc) wins over the stock module...
+When = PostTransaction
+Exec = /usr/local/lib/83sc-control/83sc-driver-guard.sh
+Depends = dkms

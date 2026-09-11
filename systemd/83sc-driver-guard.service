@@ -1,0 +1,16 @@
+[Unit]
+Description=83SC ensure patched legion_laptop is loaded
+After=systemd-modules-load.service
+Before=83sc-thermal.service
+Wants=83sc-thermal.service
+ConditionPathExists=/usr/src/LenovoLegionLinux-83sc
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/lib/83sc-control/83sc-driver-guard.sh
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

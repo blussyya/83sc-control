@@ -17,7 +17,22 @@ install -Dm644 "$HERE/systemd/83sc-thermal.service" "$UNIT"
 echo "  -> $LIBDIR/83sc-thermal.sh"
 echo "  -> $UNIT"
 
+# The distro ships a competing DKMS module built from a pre-fix commit. On a
+# kernel upgrade whichever installs last wins, and when the stock one wins the
+# fan curve silently stops working. The guard detects and repairs that.
+install -Dm755 "$HERE/systemd/83sc-driver-guard.sh" "$LIBDIR/83sc-driver-guard.sh"
+install -Dm644 "$HERE/systemd/83sc-driver-guard.service" /etc/systemd/system/83sc-driver-guard.service
+echo "  -> $LIBDIR/83sc-driver-guard.sh"
+echo "  -> /etc/systemd/system/83sc-driver-guard.service"
+
+# On Arch-likes, repair right after the upgrade instead of waiting for a reboot.
+if [[ -d /etc/pacman.d/hooks || -d /usr/share/libalpm/hooks ]]; then
+    install -Dm644 "$HERE/pacman/83sc-driver.hook" /etc/pacman.d/hooks/83sc-driver.hook
+    echo "  -> /etc/pacman.d/hooks/83sc-driver.hook"
+fi
+
 systemctl daemon-reload
+systemctl enable 83sc-driver-guard.service
 systemctl enable 83sc-thermal.service
 echo "  -> enabled (runs at boot)"
 

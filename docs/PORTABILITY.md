@@ -16,6 +16,42 @@ survives what.
 
 Everything else (GUI, CLI, idle dimmer) is convenience on top.
 
+## The failure this actually hit (kernel 6.18.48 -> 6.18.50)
+
+Observed in the wild, not theory: the distro package `lenovolegionlinux`
+registers its **own** DKMS module `LenovoLegionLinux/1.0.0`, built from an
+upstream commit that predates our fixes. Both produce the same
+`legion-laptop.ko`. On a kernel upgrade DKMS autoinstalls both and **whichever
+installs last wins, silently**. The stock one won:
+
+- `fan2_input` reappeared (the phantom fan), `fan1_max` read 10000 not 5400
+- every `pwm1_auto_point*` write failed, temps read back 0 - the original bug
+- `83sc-thermal.service` failed; power limits still applied, fan curve did not
+
+**Fix / prevention:** `83sc-driver-guard.sh` detects the stock module (phantom
+fan2 present, or `fan1_max != 5400`), drops the stock DKMS registration,
+installs ours, and reloads. It runs:
+
+- at boot, via `83sc-driver-guard.service` (ordered `Before=83sc-thermal`), and
+- on Arch-likes, immediately post-upgrade via `/etc/pacman.d/hooks/83sc-driver.hook`
+  (triggered by kernel, dkms, or lenovolegionlinux transactions).
+
+Manual repair if you ever need it:
+
+```
+sudo ./install-dkms.sh && sudo systemctl restart 83sc-thermal
+```
+
+Check which module is live at any time:
+
+```
+cat /sys/class/hwmon/hwmon*/fan1_max        # 5400 = patched, 10000 = stock
+ls /sys/class/hwmon/hwmon*/fan2_input       # present = stock module
+```
+
+You can also remove the competing package entirely (`pacman -Rns
+lenovolegionlinux`) once you are happy the patched DKMS covers everything.
+
 ## Kernel upgrade (same distro)
 
 - **DKMS rebuilds the driver automatically.** `install-dkms.sh` registers the
