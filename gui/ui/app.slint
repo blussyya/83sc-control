@@ -131,6 +131,8 @@ export component MainWindow inherits Window {
     in-out property <int> bind-power: 0;
 
     in-out property <int> edit-kbd;
+    in-out property <int> edit-kbd-idle-secs: 5;
+    in-out property <bool> tog-kbd-idle;
     in-out property <int> edit-refresh-idx;
     in-out property <int> edit-cpu-temp;
     in-out property <int> edit-gpu-temp;
@@ -167,6 +169,7 @@ export component MainWindow inherits Window {
     callback set-flag(string, bool);
     callback set-charge-mode(bool, bool);
     callback apply-kbd(int);
+    callback apply-kbd-idle(bool, int);
     callback apply-refresh(int);
     callback apply-ec-limits();
     callback apply-gpu-extra();
@@ -770,6 +773,28 @@ export component MainWindow inherits Window {
                                 Note {
                                     text: "Three levels of white backlight — this chassis has no RGB zones, "
                                         + "so there is nothing for a colour picker to drive.";
+                                }
+                            }
+                        }
+
+                        GroupBox {
+                            title: "Turn off when idle";
+                            VerticalLayout {
+                                spacing: 10px;
+                                CheckBox {
+                                    text: "Switch the backlight off after a period without input";
+                                    checked <=> tog-kbd-idle;
+                                    toggled => { apply-kbd-idle(self.checked, edit-kbd-idle-secs); }
+                                }
+                                SliderRow {
+                                    label: "Turn off after"; minimum: 1; maximum: 120; unit: "s";
+                                    value: edit-kbd-idle-secs;
+                                    enabled: tog-kbd-idle;
+                                    changed(v) => { edit-kbd-idle-secs = v; apply-kbd-idle(tog-kbd-idle, v); }
+                                }
+                                Note {
+                                    text: "Comes back on at the first keypress or mouse move, to the level set above. "
+                                        + "Runs as a user service (83sc-kbd-idle) so it survives logout and reboot.";
                                 }
                             }
                         }

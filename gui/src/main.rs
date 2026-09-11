@@ -1,4 +1,5 @@
 mod hw;
+mod kbd_idle;
 mod profiles;
 
 use hw::Hw;
@@ -50,6 +51,8 @@ fn seed_extras(ui: &MainWindow, e: &hw::Extras) {
     ui.set_tog_overdrive(e.overdrive);
     ui.set_tog_plcoupling(e.pl_coupling);
     ui.set_edit_kbd(e.kbd_backlight);
+    ui.set_tog_kbd_idle(kbd_idle::enabled());
+    ui.set_edit_kbd_idle_secs(kbd_idle::timeout_secs());
     ui.set_edit_cpu_temp(e.cpu_temp_limit);
     ui.set_edit_gpu_temp(e.gpu_temp_limit);
     ui.set_edit_crossload(e.cross_loading);
@@ -339,6 +342,30 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     _ => "normal charging",
                 },
             );
+        }
+    });
+
+    // Slider drags fire per pixel; restarting a systemd unit that often is
+    // pointless churn, so settle for 400ms before touching it.
+    ui.on_apply_kbd_idle({
+        let w = ui.as_weak();
+        let timer = slint::Timer::default();
+        move |on, secs| {
+            let w = w.clone();
+            timer.start(slint::TimerMode::SingleShot, std::time::Duration::from_millis(400), move || {
+                let ui = w.unwrap();
+                match kbd_idle::apply(on, secs) {
+                    Ok(()) => {
+                        ui.set_status_error(false);
+                        ui.set_status(if on {
+                            format!("keyboard backlight off after {secs}s idle").into()
+                        } else {
+                            SharedString::from("idle backlight off disabled")
+                        });
+                    }
+                    Err(e) => { ui.set_status_error(true); ui.set_status(e.into()); }
+                }
+            });
         }
     });
 
