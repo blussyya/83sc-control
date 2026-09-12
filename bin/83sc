@@ -19,7 +19,14 @@ import subprocess
 import sys
 import time
 
-HELPER = "/usr/local/lib/83sc-control/helper.py"
+def _find_helper():
+    for p in ("/usr/lib/83sc-control/helper.py",
+              "/usr/local/lib/83sc-control/helper.py"):
+        if os.path.exists(p):
+            return p
+    return "/usr/local/lib/83sc-control/helper.py"
+
+HELPER = _find_helper()
 STATE = os.path.expanduser("~/.cache/83sc-control")
 
 _tty = sys.stdout.isatty()

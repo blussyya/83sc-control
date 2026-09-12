@@ -1,0 +1,51 @@
+# Maintainer: blussyya <https://github.com/blussyya>
+pkgname=83sc-control
+pkgver=1.0.0
+pkgrel=1
+pkgdesc="Thermal, power and fan control for the Lenovo LOQ Essential 15IRX11 (83SC)"
+arch=('x86_64')
+url="https://github.com/blussyya/83sc-control"
+license=('GPL-2.0-or-later')
+depends=('python' 'systemd' 'polkit')
+optdepends=('lenovolegionlinux>=0.0.26: fan curve control (required for fan features)'
+            'intel-undervolt: apply a CPU voltage offset at boot')
+makedepends=('cargo' 'git')
+source=()
+install=83sc-control.install
+
+build() {
+    cd "$startdir/.."
+    cargo build --release --manifest-path gui/Cargo.toml
+    cargo build --release --manifest-path kbd-idle/Cargo.toml
+}
+
+package() {
+    cd "$startdir/.."
+
+    install -Dm755 gui/target/release/legion83-gui   "$pkgdir/usr/bin/legion83-gui"
+    install -Dm755 kbd-idle/target/release/83sc-kbd-idle "$pkgdir/usr/bin/83sc-kbd-idle"
+    for t in 83sc 83sc-diag 83sc-fan 83sc-snap; do
+        install -Dm755 "bin/$t" "$pkgdir/usr/bin/$t"
+    done
+
+    install -Dm755 helper/helper.py                  "$pkgdir/usr/lib/83sc-control/helper.py"
+    install -Dm755 systemd/83sc-thermal.sh           "$pkgdir/usr/lib/83sc-control/83sc-thermal.sh"
+    install -Dm755 systemd/83sc-driver-guard.sh      "$pkgdir/usr/lib/83sc-control/83sc-driver-guard.sh"
+
+    for u in 83sc-thermal 83sc-driver-guard; do
+        sed 's#/usr/local/lib/#/usr/lib/#' "systemd/$u.service" \
+            > "$srcdir/$u.service"
+        install -Dm644 "$srcdir/$u.service" "$pkgdir/usr/lib/systemd/system/$u.service"
+    done
+    sed 's#%h/.local/bin/#/usr/bin/#' systemd/83sc-kbd-idle.service \
+        > "$srcdir/83sc-kbd-idle.service"
+    install -Dm644 "$srcdir/83sc-kbd-idle.service" \
+        "$pkgdir/usr/lib/systemd/user/83sc-kbd-idle.service"
+
+    install -Dm644 gui/83sc-control.desktop "$pkgdir/usr/share/applications/83sc-control.desktop"
+    sed 's/%ADMINGROUP%/%wheel/' packaging/83sc-control.sudoers > "$srcdir/sudoers"
+    install -Dm440 "$srcdir/sudoers" "$pkgdir/etc/sudoers.d/83sc-control"
+
+    install -Dm644 README.md "$pkgdir/usr/share/doc/$pkgname/README.md"
+    install -Dm644 docs/PORTABILITY.md "$pkgdir/usr/share/doc/$pkgname/PORTABILITY.md"
+}

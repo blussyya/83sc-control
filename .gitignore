@@ -13,3 +13,7 @@ kbd-idle/target/
 *.exe
 secn*.txt
 bios_tool_*.7z
+dist/
+packaging/*.pkg.tar.zst
+packaging/src/
+packaging/pkg/

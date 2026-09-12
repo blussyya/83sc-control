@@ -5,7 +5,14 @@ import subprocess
 import sys
 import time
 
-HELPER = "/usr/local/lib/83sc-control/helper.py"
+def _find_helper():
+    for p in ("/usr/lib/83sc-control/helper.py",
+              "/usr/local/lib/83sc-control/helper.py"):
+        if os.path.exists(p):
+            return p
+    return "/usr/local/lib/83sc-control/helper.py"
+
+HELPER = _find_helper()
 LEGION = "/sys/bus/platform/devices/PNP0C09:00"
 
 USAGE = """

@@ -4,7 +4,20 @@ use std::process::Command;
 
 pub const LEGION: &str = "/sys/bus/platform/devices/PNP0C09:00";
 pub const RAPL: &str = "/sys/class/powercap/intel-rapl:0";
-pub const HELPER: &str = "/usr/local/lib/83sc-control/helper.py";
+/// Packaged installs land in /usr, setup.sh installs to /usr/local. Resolve at
+/// runtime so the same binary works under either layout.
+pub fn helper() -> &'static str {
+    const CANDIDATES: [&str; 2] = [
+        "/usr/lib/83sc-control/helper.py",
+        "/usr/local/lib/83sc-control/helper.py",
+    ];
+    for c in CANDIDATES {
+        if Path::new(c).exists() {
+            return c;
+        }
+    }
+    CANDIDATES[1]
+}
 pub const PSTATE: &str = "/sys/devices/system/cpu/intel_pstate";
 
 pub const POINTS: usize = 10;
@@ -37,7 +50,7 @@ pub fn hwmon(name: &str) -> Option<PathBuf> {
 /// never needs root.
 pub fn write(path: &str, value: impl ToString) -> Result<(), String> {
     let out = Command::new("sudo")
-        .args(["-n", HELPER, "set", path, &value.to_string()])
+        .args(["-n", helper(), "set", path, &value.to_string()])
         .output()
         .map_err(|e| format!("could not run helper: {e}"))?;
     // rc 4 means the write landed but read back different (firmware clamped or
@@ -383,7 +396,7 @@ impl Hw {
     /// file is outside the writable sysfs prefixes by design.
     pub fn set_undervolt(&self, mv: i32) -> Result<(), String> {
         let out = Command::new("sudo")
-            .args(["-n", HELPER, "undervolt", &mv.to_string()])
+            .args(["-n", helper(), "undervolt", &mv.to_string()])
             .output()
             .map_err(|e| format!("could not run helper: {e}"))?;
         match out.status.code() {
@@ -399,7 +412,7 @@ impl Hw {
     /// Make the undervolt survive reboot via intel-undervolt's systemd unit.
     pub fn set_undervolt_persist(&self, on: bool) -> Result<(), String> {
         let out = Command::new("sudo")
-            .args(["-n", HELPER, "undervolt-persist", if on { "1" } else { "0" }])
+            .args(["-n", helper(), "undervolt-persist", if on { "1" } else { "0" }])
             .output()
             .map_err(|e| format!("could not run helper: {e}"))?;
         if out.status.success() {
@@ -423,7 +436,7 @@ impl Hw {
     /// Snapshot whatever the hardware is currently doing into
     /// /etc/83sc-control/boot.conf, which 83sc-thermal.service replays at boot.
     pub fn boot_save(&self) -> Result<(), String> {
-        let out = Command::new("sudo").args(["-n", HELPER, "boot-save"]).output()
+        let out = Command::new("sudo").args(["-n", helper(), "boot-save"]).output()
             .map_err(|e| format!("could not run helper: {e}"))?;
         if out.status.success() { Ok(()) } else {
             Err(String::from_utf8_lossy(&out.stderr).trim().lines().next()

@@ -1,0 +1,4 @@
+# 83sc-control: allow the admin group to run the one privileged helper without
+# a password. The helper validates every argument against a whitelist, so this
+# does not grant arbitrary root.
+%ADMINGROUP% ALL=(root) NOPASSWD: /usr/lib/83sc-control/helper.py
