@@ -40,7 +40,40 @@ All of GZ52/CGDB/GCDB are in the EC space our helper already reads/writes
 we get it with **no EC firmware flash** — pure EC-register writes, exactly the
 "leftover endpoint" theory.
 
-## Open questions / next steps
+## RESULT (tested 2026-09-12) - parked
+
+The endpoint is real but **not wired to the power LED on this model**.
+
+What was wrong the first time: `GZ52`/`CGDB`/`GCDB` live in the **`ECMM`
+region, `SystemMemory` at `0xFE0B0400`** - not in the `EmbeddedControl` port
+space that `ec_sys` and our `ec-write` helper target. The firmware declares
+`ECAM` (EmbeddedControl) with a completely **empty field**; nothing lives
+there. Every early probe wrote the wrong address space, which is why writes
+appeared to "revert" and nothing ever lit up. Those results were void, not
+negative.
+
+Re-tested properly via `/dev/mem` at `0xFE0B0400` (window confirmed: byte
+`0x03` tracks the keyboard `KLEN` exactly):
+
+- `GZ52 = 1` (take APP ownership) **sticks** - it is a real, writable register.
+- Under ownership, sweeping `CGDB` (0x01..0xff) and `GCDB`: **no visible
+  change** to the power LED or the rear I/O light.
+- Only `KLEN` moves the keyboard, i.e. the path we already had.
+
+Conclusion: these are the Legion RGB-variant lighting registers, present in
+shared firmware but not connected to this chassis's indicators - the same
+pattern as the phantom `fan2`, the empty `SLT2` cases 4/5, and the absent
+Spectrum WMI GUID. The power LED stays EC-internal with **no host-reachable
+control path**; changing it would require patched EC firmware.
+
+Keyboard brightness remains 3 usable levels (`KLEN` is a 2-bit field; value 3
+is electrically identical to 2, confirmed by eye in both address spaces).
+Bypassing UPower to write the EC directly reaches the same four codes - the
+limit is the field width, not the API.
+
+Practical answer for the power LED: a physical dimming sticker.
+
+## If ever resumed - next steps
 1. Which light ID is the power LED? (0x020B / 0x0201 are the small-range
    indicator candidates.) Map by experiment.
 2. Does taking APP ownership (GZ52=1) alone change the power LED? (Minimal,
