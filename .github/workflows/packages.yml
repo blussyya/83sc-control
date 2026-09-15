@@ -113,7 +113,12 @@ jobs:
           fi
           chmod -R 777 /cache
           su builder -c 'export CARGO_HOME=/cache/cargo CARGO_TARGET_DIR=/cache/target; cd packaging && makepkg -f --nodeps --noconfirm'
-          mkdir -p dist && mv packaging/*.pkg.tar.zst dist/
+          mkdir -p dist
+          for f in packaging/*.pkg.tar.zst; do
+            case "$f" in *-debug-*) continue;; esac
+            mv "$f" dist/
+          done
+          ls -l dist/
       - uses: actions/upload-artifact@v4
         with:
           name: arch

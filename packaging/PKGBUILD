@@ -10,6 +10,8 @@ depends=('python' 'systemd' 'polkit')
 optdepends=('lenovolegionlinux>=0.0.26: fan curve control (required for fan features)'
             'intel-undervolt: apply a CPU voltage offset at boot')
 makedepends=('cargo' 'git')
+# the rust release profile already strips; a -debug package would be empty
+options=(!debug)
 source=()
 install=83sc-control.install
 
