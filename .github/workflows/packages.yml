@@ -64,7 +64,9 @@ jobs:
           cp -a . /tmp/src/83sc-control-$VER/
           tar czf /tmp/83sc-control-$VER.tar.gz -C /tmp/src 83sc-control-$VER
           rpmbuild -ta /tmp/83sc-control-$VER.tar.gz
-          mkdir -p dist && find /root/rpmbuild/RPMS -name '*.rpm' -exec cp {} dist/ \;
+          mkdir -p dist
+          find "$(rpm --eval %{_rpmdir})" -name '*.rpm' -exec cp {} dist/ \;
+          ls -l dist/
       - uses: actions/upload-artifact@v4
         with:
           name: rpm
