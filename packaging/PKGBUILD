@@ -22,8 +22,12 @@ build() {
 package() {
     cd "$startdir/.."
 
-    install -Dm755 gui/target/release/legion83-gui   "$pkgdir/usr/bin/legion83-gui"
-    install -Dm755 kbd-idle/target/release/83sc-kbd-idle "$pkgdir/usr/bin/83sc-kbd-idle"
+    # CI points CARGO_TARGET_DIR at a cached path shared by both crates; without
+    # it each crate builds into its own target/.
+    local gui_t="${CARGO_TARGET_DIR:-gui/target}"
+    local kbd_t="${CARGO_TARGET_DIR:-kbd-idle/target}"
+    install -Dm755 "$gui_t/release/legion83-gui"    "$pkgdir/usr/bin/legion83-gui"
+    install -Dm755 "$kbd_t/release/83sc-kbd-idle"   "$pkgdir/usr/bin/83sc-kbd-idle"
     for t in 83sc 83sc-diag 83sc-fan 83sc-snap; do
         install -Dm755 "bin/$t" "$pkgdir/usr/bin/$t"
     done

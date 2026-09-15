@@ -31,8 +31,10 @@ cargo build --release --manifest-path gui/Cargo.toml
 cargo build --release --manifest-path kbd-idle/Cargo.toml
 
 %install
-install -Dm755 gui/target/release/legion83-gui        %{buildroot}%{_bindir}/legion83-gui
-install -Dm755 kbd-idle/target/release/83sc-kbd-idle  %{buildroot}%{_bindir}/83sc-kbd-idle
+GUI_T="${CARGO_TARGET_DIR:-gui/target}"
+KBD_T="${CARGO_TARGET_DIR:-kbd-idle/target}"
+install -Dm755 "$GUI_T/release/legion83-gui"       %{buildroot}%{_bindir}/legion83-gui
+install -Dm755 "$KBD_T/release/83sc-kbd-idle"      %{buildroot}%{_bindir}/83sc-kbd-idle
 for t in 83sc 83sc-diag 83sc-fan 83sc-snap; do
     install -Dm755 bin/$t %{buildroot}%{_bindir}/$t
 done
