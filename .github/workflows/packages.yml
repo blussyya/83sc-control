@@ -1,0 +1,112 @@
+name: packages
+
+on:
+  push:
+    branches: [master]
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  deb:
+    name: .deb (debian/ubuntu)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: install build deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential clang python3 pkg-config \
+            libfontconfig1-dev dpkg-dev
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: "gui -> target\nkbd-idle -> target"
+      - name: version from tag
+        run: echo "VER=${GITHUB_REF_NAME#v}" >> "$GITHUB_ENV"
+        if: startsWith(github.ref, 'refs/tags/v')
+      - name: build
+        run: ./packaging/build-deb.sh
+      - name: verify contents
+        run: |
+          dpkg-deb -I dist/*.deb
+          dpkg-deb -c dist/*.deb | grep -E 'usr/bin/(83sc|legion83-gui)$'
+      - uses: actions/upload-artifact@v4
+        with:
+          name: deb
+          path: dist/*.deb
+
+  rpm:
+    name: .rpm (fedora)
+    runs-on: ubuntu-latest
+    container: fedora:latest
+    steps:
+      - name: install build deps
+        run: |
+          dnf -y install rpm-build rpmdevtools cargo rust gcc gcc-c++ clang \
+            python3 fontconfig-devel git tar
+      - uses: actions/checkout@v4
+      - name: version from tag
+        run: echo "VER=${GITHUB_REF_NAME#v}" >> "$GITHUB_ENV"
+        if: startsWith(github.ref, 'refs/tags/v')
+      - name: build
+        run: |
+          VER="${VER:-1.0.0}"
+          sed -i "s/^Version:.*/Version:        $VER/" packaging/83sc-control.spec
+          mkdir -p /tmp/src/83sc-control-$VER
+          cp -a . /tmp/src/83sc-control-$VER/
+          tar czf /tmp/83sc-control-$VER.tar.gz -C /tmp/src 83sc-control-$VER
+          rpmbuild -ta /tmp/83sc-control-$VER.tar.gz
+          mkdir -p dist && find /root/rpmbuild/RPMS -name '*.rpm' -exec cp {} dist/ \;
+      - uses: actions/upload-artifact@v4
+        with:
+          name: rpm
+          path: dist/*.rpm
+
+  arch:
+    name: .pkg.tar.zst (arch)
+    runs-on: ubuntu-latest
+    container: archlinux:base-devel
+    steps:
+      - name: install build deps
+        run: pacman -Syu --noconfirm rust clang python fontconfig git
+      - uses: actions/checkout@v4
+      # makepkg refuses to run as root, so build as a normal user
+      - name: build
+        run: |
+          useradd -m builder
+          chown -R builder:builder .
+          if [ -n "${GITHUB_REF_NAME#v}" ] && [ "${GITHUB_REF_TYPE}" = tag ]; then
+            sed -i "s/^pkgver=.*/pkgver=${GITHUB_REF_NAME#v}/" packaging/PKGBUILD
+          fi
+          su builder -c 'cd packaging && makepkg -f --nodeps --noconfirm'
+          mkdir -p dist && mv packaging/*.pkg.tar.zst dist/
+      - uses: actions/upload-artifact@v4
+        with:
+          name: arch
+          path: dist/*.pkg.tar.zst
+
+  release:
+    name: attach to release
+    needs: [deb, rpm, arch]
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/*.deb
+            dist/*.rpm
+            dist/*.pkg.tar.zst
+          generate_release_notes: true

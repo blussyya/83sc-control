@@ -2,7 +2,7 @@
 # Build a .deb. Works on any distro that has dpkg-deb + cargo.
 #   ./packaging/build-deb.sh   ->  dist/83sc-control_1.0.0_amd64.deb
 set -euo pipefail
-VER=1.0.0
+VER="${VER:-1.0.0}"
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 OUT="$ROOT/dist"; STAGE="$(mktemp -d)"
 trap 'rm -rf "$STAGE"' EXIT
