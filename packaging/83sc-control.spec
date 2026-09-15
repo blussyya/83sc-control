@@ -7,6 +7,10 @@ License:        GPL-2.0-or-later
 URL:            https://github.com/blussyya/83sc-control
 Source0:        %{name}-%{version}.tar.gz
 
+# The Rust release profile already strips, so the debuginfo/debugsource
+# subpackages carry almost nothing and inflate the build to ~60MB.
+%global debug_package %{nil}
+
 BuildRequires:  cargo
 BuildRequires:  gcc
 Requires:       python3
