@@ -50,7 +50,7 @@ jobs:
     steps:
       - name: install build deps
         run: |
-          dnf -y install rpm-build rpmdevtools cargo rust gcc gcc-c++ clang \
+          dnf -y install rpm-build rpmdevtools systemd-rpm-macros cargo rust gcc gcc-c++ clang \
             python3 fontconfig-devel git tar
       - uses: actions/checkout@v4
       - name: version from tag
