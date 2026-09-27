@@ -22,7 +22,6 @@ cat > "$DEST/dkms.conf" <<'CONF'
 PACKAGE_NAME="LenovoLegionLinux"
 PACKAGE_VERSION="83sc"
 MAKE[0]="make KERNELVERSION=${kernelver}"
-CLEAN="make clean"
 BUILT_MODULE_NAME[0]="legion-laptop"
 DEST_MODULE_NAME[0]="legion-laptop"
 DEST_MODULE_LOCATION[0]="/kernel/drivers/platform/x86"
