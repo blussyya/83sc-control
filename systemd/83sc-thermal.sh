@@ -73,6 +73,10 @@ apply_boot_conf() {
         PL1_UW)        put "$RAPL/constraint_0_power_limit_uw" "$val" PL1 || rc=1 ;;
         PL2_UW)        put "$RAPL/constraint_1_power_limit_uw" "$val" PL2 || rc=1 ;;
         TAU_US)        put "$RAPL/constraint_0_time_window_us" "$val" tau || rc=1 ;;
+        # Best effort: outside Lenovo's advertised range these need
+        # legion_laptop.ignore_capdata=1, or the driver clamps them.
+        FW_PL1)        put "$LEGION/cpu_longterm_powerlimit" "$val" fw_pl1 || true ;;
+        FW_PL2)        put "$LEGION/cpu_shortterm_powerlimit" "$val" fw_pl2 || true ;;
         MAX_PERF_PCT)  put /sys/devices/system/cpu/intel_pstate/max_perf_pct "$val" max_perf || rc=1 ;;
         GPU_CTGP)      put "$LEGION/gpu_ctgp_powerlimit" "$val" gpu_ctgp || true ;;
         GPU_PPAB)      put "$LEGION/gpu_ppab_powerlimit" "$val" gpu_ppab || true ;;

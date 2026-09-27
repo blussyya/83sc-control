@@ -1,9 +1,21 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 pub const LEGION: &str = "/sys/bus/platform/devices/PNP0C09:00";
 pub const RAPL: &str = "/sys/class/powercap/intel-rapl:0";
+/// The firmware's copy of PL1/PL2 (MCHBAR). The CPU obeys the lower of this
+/// and the MSR limits in RAPL, so a limit only takes if both agree.
+pub const RAPL_MMIO: &str = "/sys/class/powercap/intel-rapl-mmio:0";
+
+/// Set by every hardware write that lands, so the poll loop can refresh the
+/// boot snapshot after changes from any path without each handler asking.
+static CHANGED: AtomicBool = AtomicBool::new(false);
+
+pub fn take_changed() -> bool {
+    CHANGED.swap(false, Ordering::Relaxed)
+}
 /// Packaged installs land in /usr, setup.sh installs to /usr/local. Resolve at
 /// runtime so the same binary works under either layout.
 pub fn helper() -> &'static str {
@@ -57,7 +69,10 @@ pub fn write(path: &str, value: impl ToString) -> Result<(), String> {
     // rc 4 means the write landed but read back different (firmware clamped or
     // quantised it) which is not a failure.
     match out.status.code() {
-        Some(0) | Some(4) => Ok(()),
+        Some(0) | Some(4) => {
+            CHANGED.store(true, Ordering::Relaxed);
+            Ok(())
+        }
         _ => {
             let err = String::from_utf8_lossy(&out.stderr);
             let err = err.trim();
@@ -177,8 +192,17 @@ impl Hw {
         }
         t.fan_fullspeed = read(&format!("{LEGION}/fan_fullspeed")).as_deref() == Some("1");
         t.powermode = read_i32(&format!("{LEGION}/powermode")).unwrap_or(-1);
-        t.pl1 = read_i32(&format!("{RAPL}/constraint_0_power_limit_uw")).unwrap_or(0) / 1_000_000;
-        t.pl2 = read_i32(&format!("{RAPL}/constraint_1_power_limit_uw")).unwrap_or(0) / 1_000_000;
+        // Show what the CPU actually obeys: the lower of the MSR and MMIO limits.
+        let limit = |n: &str| {
+            let msr = read_i32(&format!("{RAPL}/{n}")).unwrap_or(0);
+            match read_i32(&format!("{RAPL_MMIO}/{n}")).filter(|v| *v > 0) {
+                Some(mmio) if msr > 0 => msr.min(mmio),
+                Some(mmio) => mmio,
+                None => msr,
+            }
+        };
+        t.pl1 = limit("constraint_0_power_limit_uw") / 1_000_000;
+        t.pl2 = limit("constraint_1_power_limit_uw") / 1_000_000;
         t.tau = read_i32(&format!("{RAPL}/constraint_0_time_window_us")).unwrap_or(0) / 1_000_000;
         t.prochot =
             read_i32("/sys/devices/system/cpu/cpu0/thermal_throttle/package_throttle_count").unwrap_or(0);
@@ -282,7 +306,24 @@ impl Hw {
                 errs.push(e);
             }
         }
+        // The firmware keeps its own PL1/PL2 in the MMIO register and the CPU
+        // obeys the lower of the two, so the MSR write alone does nothing past
+        // the firmware's value. Its setters program MMIO as value * 8.
+        for (node, val) in [("cpu_longterm_powerlimit", pl1), ("cpu_shortterm_powerlimit", pl2)] {
+            if let Err(e) = self.set_ec(node, val) {
+                errs.push(e);
+            }
+        }
         errs
+    }
+
+    /// Firmware PL1/PL2 as they read back, which is where Lenovo's range clamp
+    /// shows up when ignore_capdata is off.
+    pub fn fw_power(&self) -> (i32, i32) {
+        (
+            read_i32(&format!("{LEGION}/cpu_longterm_powerlimit")).unwrap_or(0),
+            read_i32(&format!("{LEGION}/cpu_shortterm_powerlimit")).unwrap_or(0),
+        )
     }
 
     pub fn set_gpu(&self, ctgp: i32, ppab: i32) -> Vec<String> {
@@ -408,7 +449,10 @@ impl Hw {
             .output()
             .map_err(|e| format!("could not run helper: {e}"))?;
         match out.status.code() {
-            Some(0) => Ok(()),
+            Some(0) => {
+                CHANGED.store(true, Ordering::Relaxed);
+                Ok(())
+            }
             // rc 4 = applied value did not match request; the BIOS UnderVolt
             // Protection gate silently swallows writes when enabled.
             Some(4) => Err("offset did not take - check UnderVolt Protection in BIOS".into()),

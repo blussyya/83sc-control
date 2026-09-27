@@ -63,6 +63,36 @@ fn seed_extras(ui: &MainWindow, e: &hw::Extras) {
     ui.set_edit_gpu_offset(e.gpu_target_offset);
 }
 
+/// Record which profile is live and select it in the list, so the list shows
+/// what the machine is running rather than whatever sits first.
+fn mark_applied(app: &App, ui: &MainWindow, name: &str) {
+    let idx = {
+        let mut cfg = app.cfg.borrow_mut();
+        cfg.last_applied = Some(name.to_string());
+        let _ = profiles::save(&cfg);
+        cfg.profiles.iter().position(|p| p.name == name)
+    };
+    if let Some(i) = idx {
+        ui.set_sel_profile(i as i32);
+    }
+}
+
+/// The firmware's PL1/PL2 cap what the CPU obeys. With ignore_capdata off the
+/// driver clamps them to Lenovo's range and still reports success, so compare
+/// the readback with what was asked for.
+fn power_note(hw: &Hw, pl1: i32, pl2: i32) -> Option<String> {
+    let (f1, f2) = hw.fw_power();
+    let mut held = Vec::new();
+    if f1 > 0 && f1 < pl1 { held.push(format!("PL1 at {f1} W")); }
+    if f2 > 0 && f2 < pl2 { held.push(format!("PL2 at {f2} W")); }
+    if held.is_empty() {
+        None
+    } else {
+        Some(format!("firmware held {} - tick \"Ignore Lenovo's CPU power ranges\" to go past it",
+                     held.join(" and ")))
+    }
+}
+
 fn to_stats(t: &hw::Telemetry) -> Stats {
     Stats {
         cpu_temp: t.cpu_temp,
@@ -159,6 +189,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     ui.set_edit_uv(t0.undervolt_mv);
     ui.set_edit_maxperf(if t0.max_perf_pct > 0 { t0.max_perf_pct } else { 100 });
     ui.set_persist(app.cfg.borrow().persist);
+    let last = {
+        let cfg = app.cfg.borrow();
+        cfg.last_applied.as_ref().and_then(|n| cfg.profiles.iter().position(|p| &p.name == n))
+    };
+    if let Some(i) = last {
+        ui.set_sel_profile(i as i32);
+    }
 
     *app.draft.borrow_mut() = app.hw.read_curve();
     ui.set_curve(to_curve_model(&app.draft.borrow()));
@@ -269,7 +306,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let w = ui.as_weak();
         move || {
             let ui = w.unwrap();
-            let errs = app.hw.set_power(ui.get_edit_pl1(), ui.get_edit_pl2(), ui.get_edit_tau());
+            let (pl1, pl2) = (ui.get_edit_pl1(), ui.get_edit_pl2());
+            let mut errs = app.hw.set_power(pl1, pl2, ui.get_edit_tau());
+            errs.extend(power_note(&app.hw, pl1, pl2));
             report(&ui, &errs, "power limits applied");
         }
     });
@@ -712,6 +751,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             ui.set_edit_uv(p.undervolt_mv);
             ui.set_edit_maxperf(p.max_perf_pct);
             *app.dirty.borrow_mut() = false;
+            errs.extend(power_note(&app.hw, p.pl1, p.pl2));
+            mark_applied(&app, &ui, &p.name);
             report(&ui, &errs, &format!("applied '{}'", p.name));
         }
     });
@@ -877,13 +918,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     {
         let app = app.clone();
         let w = ui.as_weak();
-        // Start at a sentinel so the first tick treats the current mode as a
-        // transition. Otherwise a profile bound to the mode you are already in
-        // never fires, because there is no change to detect.
-        let mut last_mode = i32::MIN;
-        // None so the first tick counts as a transition and applies the binding
-        let mut last_batt: Option<bool> = None;
-        let mut last_plan: Option<String> = None;
+        // Baseline on what the machine is doing now: bindings fire on real
+        // transitions only. Opening the app must not re-apply a bound profile
+        // over whatever was applied since (boot state is 83sc-thermal's job).
+        let mut last_mode = t0.powermode;
+        let mut last_batt = Some(t0.on_battery);
+        let mut last_plan = app.hw.power_plan();
         // extras() shells out to nvidia-smi and kscreen-doctor, so it runs on a
         // slower cadence than the sysfs telemetry.
         let mut tick: u32 = 0;
@@ -920,6 +960,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             ui.set_edit_tau(p.tau);
                             ui.set_status_error(false);
                             ui.set_status(format!("mode changed — applied '{}'", p.name).into());
+                            mark_applied(&app, &ui, &p.name);
                         }
                     }
                     *app.dirty.borrow_mut() = false;
@@ -957,6 +998,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             ui.set_status_error(false);
                             ui.set_status(format!("{} - applied '{}'",
                                 if t.on_battery { "on battery" } else { "on AC" }, p.name).into());
+                            mark_applied(&app, &ui, &p.name);
                         }
                     }
                     *app.dirty.borrow_mut() = false;
@@ -992,7 +1034,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         ui.set_edit_maxperf(p.max_perf_pct);
                         ui.set_status_error(false);
                         ui.set_status(format!("KDE plan '{plan}' - applied '{}'", p.name).into());
+                        mark_applied(&app, &ui, &p.name);
                         *app.dirty.borrow_mut() = false;
+                    }
+                }
+
+                // Keep the boot snapshot in step with the hardware. Checked once a
+                // tick so a burst of writes (a whole profile) costs one save.
+                if hw::take_changed() && app.cfg.borrow().persist {
+                    if let Err(e) = app.hw.boot_save() {
+                        ui.set_status_error(true);
+                        ui.set_status(format!("could not update boot state: {e}").into());
                     }
                 }
 
@@ -1019,5 +1071,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     ui.run()?;
+    // A change made in the last poll interval before closing still has to reach
+    // the boot snapshot.
+    if hw::take_changed() && app.cfg.borrow().persist {
+        let _ = app.hw.boot_save();
+    }
     Ok(())
 }

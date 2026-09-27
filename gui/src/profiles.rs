@@ -72,6 +72,9 @@ pub struct Config {
     /// Re-apply the active profile at boot via the systemd unit.
     #[serde(default)]
     pub persist: bool,
+    /// Last profile applied, by hand or by a binding. Selected on startup.
+    #[serde(default)]
+    pub last_applied: Option<String>,
 }
 
 pub fn builtins() -> Vec<Profile> {

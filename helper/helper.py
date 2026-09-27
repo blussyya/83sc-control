@@ -540,6 +540,10 @@ def cmd_boot_save(argv):
                       ("PL2_UW", "constraint_1_power_limit_uw"),
                       ("TAU_US", "constraint_0_time_window_us")):
         put(key, read(f"{RAPL}/{node}"))
+    # The firmware's own PL1/PL2 (MMIO copy). The CPU obeys the lower of these
+    # and the RAPL values above, so both have to be replayed.
+    put("FW_PL1", read(f"{LEGION}/cpu_longterm_powerlimit"))
+    put("FW_PL2", read(f"{LEGION}/cpu_shortterm_powerlimit"))
     put("MAX_PERF_PCT", read(f"{PSTATE}/max_perf_pct"))
 
     for key, node in (("CPU_TEMP_LIMIT", "cpu_temperature_limit"),
