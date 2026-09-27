@@ -10,7 +10,8 @@ set -euo pipefail
 
 NAME=LenovoLegionLinux
 VER=83sc
-SRC="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/fork/kernel_module"
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SRC="$HERE/fork/kernel_module"
 DEST=/usr/src/$NAME-$VER
 
 die() { echo "install-dkms: $*" >&2; exit 1; }
@@ -87,6 +88,20 @@ else
     install -d -m 0755 "$DEST"
     cp -a "$SRC"/. "$DEST"/
 fi
+# Local patches on top of upstream. Idempotent: a reused $DEST may already
+# carry them, and a patch that neither applies nor reverses is a hard stop
+# rather than a silently unpatched build.
+for p in "$HERE"/patches/*.patch; do
+    [[ -f $p ]] || continue
+    if patch -d "$DEST" -p2 -R -f -s --dry-run < "$p" >/dev/null 2>&1; then
+        info "patch already applied: ${p##*/}"
+    elif patch -d "$DEST" -p2 -N -s < "$p"; then
+        info "applied patch: ${p##*/}"
+    else
+        die "patch ${p##*/} does not apply to $DEST"
+    fi
+done
+
 rm -f "$DEST"/*.o "$DEST"/*.ko "$DEST"/*.mod* "$DEST"/Module.symvers "$DEST"/modules.order 2>/dev/null || true
 
 cat > "$DEST/dkms.conf" <<EOF

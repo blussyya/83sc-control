@@ -608,6 +608,36 @@ def cmd_undervolt_persist(argv):
     return 0 if r.returncode == 0 else 3
 
 
+CAPDATA_PARAM = "/sys/module/legion_laptop/parameters/ignore_capdata"
+CAPDATA_CONF = "/etc/modprobe.d/83sc-capdata.conf"
+
+def cmd_capdata_limits(argv):
+    """Let CPU PL1/PL2/cross-load go past Lenovo's advertised ranges.
+
+    Flips the patched driver's ignore_capdata parameter now, and writes a
+    fixed modprobe.d file so it is set again on every module load (boot,
+    driver-guard reload, kernel upgrade) before anything writes a limit.
+    """
+    if not argv or argv[0] not in ("0", "1"):
+        die("usage: capdata-limits <0|1>   (1 = ignore advertised ranges)")
+    on = argv[0] == "1"
+    if not os.path.exists(CAPDATA_PARAM):
+        die("legion_laptop has no ignore_capdata parameter - "
+            "install the patched driver: sudo ./install-dkms.sh")
+    ok, err = write_raw(CAPDATA_PARAM, "Y" if on else "N")
+    if on:
+        with open(CAPDATA_CONF, "w") as f:
+            f.write("# written by 83sc-control: do not clamp CPU power limits\n"
+                    "# to the firmware's advertised ranges\n"
+                    "options legion_laptop ignore_capdata=1\n")
+        os.chmod(CAPDATA_CONF, 0o644)
+    elif os.path.exists(CAPDATA_CONF):
+        os.remove(CAPDATA_CONF)
+    print(json.dumps({"ignore_capdata": read(CAPDATA_PARAM), "write_ok": ok,
+                      "error": err, "persisted": os.path.exists(CAPDATA_CONF)}))
+    return 0 if ok else 3
+
+
 def cmd_dump_legion(argv):
     allowed = {"ecmemory", "ecmemoryram", "fancurve"}
     name = argv[0] if argv else "ecmemory"
@@ -656,6 +686,7 @@ USAGE = """83sc-control helper (runs as root)
   gpu-hotspot [pci_addr]     Blackwell junction temp via BAR0 (read-only)
   acpidump [filename]        dump ACPI tables to /var/lib/83sc-control/
   modprobe <mod> [k=v...]    load a kernel module
+  capdata-limits <0|1>       1 = let CPU PL1/PL2/cross-load past Lenovo's ranges
 
 Writes are confined to hardware subsystems (see 'targets'). --unsafe gates
 operations that can hang the machine or confuse the EC; it stops accidents,
@@ -677,6 +708,7 @@ def main():
         "dump-legion": lambda: cmd_dump_legion(rest),
         "undervolt": lambda: cmd_undervolt(rest),
         "undervolt-persist": lambda: cmd_undervolt_persist(rest),
+        "capdata-limits": lambda: cmd_capdata_limits(rest),
         "boot-save": lambda: cmd_boot_save(rest),
         "gpu-hotspot": lambda: cmd_gpu_hotspot(rest),
         "acpidump": lambda: cmd_acpidump(rest), "modprobe": lambda: cmd_modprobe(rest),

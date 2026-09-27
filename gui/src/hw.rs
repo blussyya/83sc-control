@@ -19,6 +19,7 @@ pub fn helper() -> &'static str {
     CANDIDATES[1]
 }
 pub const PSTATE: &str = "/sys/devices/system/cpu/intel_pstate";
+const CAPDATA_PARAM: &str = "/sys/module/legion_laptop/parameters/ignore_capdata";
 
 pub const POINTS: usize = 10;
 
@@ -121,6 +122,9 @@ pub struct Extras {
     pub cross_loading: i32,
     pub ec_tau: i32,
     pub pl_coupling: bool,
+    /// legion_laptop was built with patches/0001-ignore-capdata.patch
+    pub capdata_avail: bool,
+    pub ignore_capdata: bool,
     pub gpu_boost: i32,
     pub gpu_target_offset: i32,
 
@@ -323,6 +327,10 @@ impl Hw {
         e.flip_to_start = flag("flip_to_start");
         e.overdrive = flag("overdrive");
         e.pl_coupling = flag("cpu_pl_coupling");
+        // bool module params read back as Y/N; absent on an unpatched driver
+        let capdata = read(CAPDATA_PARAM);
+        e.capdata_avail = capdata.is_some();
+        e.ignore_capdata = capdata.as_deref() == Some("Y");
 
         e.kbd_backlight = read_i32(KBD_LEDS[0]).unwrap_or(0);
         e.kbd_max = read_i32("/sys/class/leds/platform::kbd_backlight/max_brightness").unwrap_or(2);
@@ -406,6 +414,21 @@ impl Hw {
             Some(4) => Err("offset did not take - check UnderVolt Protection in BIOS".into()),
             _ => Err(String::from_utf8_lossy(&out.stderr).trim().lines().next()
                      .unwrap_or("undervolt failed").to_string()),
+        }
+    }
+
+    /// Stop the driver clamping CPU PL1/PL2/cross-load to Lenovo's advertised
+    /// ranges. The helper also writes the modprobe.d option so it survives reboot.
+    pub fn set_capdata_limits(&self, on: bool) -> Result<(), String> {
+        let out = Command::new("sudo")
+            .args(["-n", helper(), "capdata-limits", if on { "1" } else { "0" }])
+            .output()
+            .map_err(|e| format!("could not run helper: {e}"))?;
+        if out.status.success() {
+            Ok(())
+        } else {
+            Err(String::from_utf8_lossy(&out.stderr).trim().lines().next()
+                .unwrap_or("could not change the firmware range clamp").to_string())
         }
     }
 

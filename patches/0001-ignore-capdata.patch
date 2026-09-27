@@ -1,0 +1,35 @@
+--- a/kernel_module/legion-laptop.c
++++ b/kernel_module/legion-laptop.c
+@@ -99,6 +99,12 @@
+ 	enable_platformprofile,
+ 	"Enable the platform profile sysfs API to read and write the power mode.");
+ 
++static bool ignore_capdata;
++module_param(ignore_capdata, bool, 0644);
++MODULE_PARM_DESC(
++	ignore_capdata,
++	"Do not clamp CPU power limits (PL1, PL2, cross-loading) to the ranges advertised in LENOVO_CAPABILITY_DATA_01. The firmware setters accept any value; the advertised range is policy, not a hardware limit.");
++
+ // TODO: remove this?
+ #define LEGIONFEATURES \
+ 	"fancurve powermode platformprofile platformprofilenotify minifancurve fancurve_pmw_speed fancurve_rpm_speed"
+@@ -6070,6 +6076,19 @@
+ 	if (err)
+ 		return err;
+ 
++	/*
++	 * The firmware stores these three as-is (EC field, then value * 8 into
++	 * the CPU PL register), so the advertised range is not enforced below
++	 * us. Temperature and tau are left clamped: the temperature becomes a
++	 * TCC offset of 100 - value, and tau is only programmed for the
++	 * discrete values the firmware switches on.
++	 */
++	if (ignore_capdata &&
++	    (feature == OtherMethodFeature_CPU_SHORT_TERM_POWER_LIMIT ||
++	     feature == OtherMethodFeature_CPU_LONG_TERM_POWER_LIMIT ||
++	     feature == OtherMethodFeature_CPU_CROSS_LOAD_POWER_LIMIT))
++		return (*value < 1 || *value > 255) ? -EINVAL : 0;
++
+ 	for (i = 0; i < priv->capdata_count; i++) {
+ 		const struct capdata01 *p = &priv->capdata[i];
+ 

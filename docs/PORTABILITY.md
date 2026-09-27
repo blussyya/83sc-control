@@ -60,7 +60,8 @@ lenovolegionlinux`) once you are happy the patched DKMS covers everything.
   requirement. It auto-detects clang- vs gcc-built kernels.
 - **If your new kernel already ships the upstream fix**, you don't need the
   DKMS override at all. Remove it with `sudo ./install-dkms.sh --remove` and
-  rely on the stock module. Check with:
+  rely on the stock module. The stock module has no `ignore_capdata`, so the
+  GUI's "Ignore Lenovo's CPU power ranges" toggle greys out. Check with:
   `grep -c pwm1_auto_point1_temp /sys/class/hwmon/hwmon*/uevent` style probing,
   or just confirm `fan1_max` reads 5400 and point-1 temp is non-zero.
 - The boot service is kernel-independent; nothing to do.

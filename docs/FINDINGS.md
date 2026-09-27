@@ -115,7 +115,7 @@ move — the silent-rejection pattern this firmware uses throughout.
 | Power modes, custom mode | works | `powermode` |
 | CPU power limits | works | RAPL, plus `cpu_longterm/shortterm_powerlimit` |
 | CPU throttle point | works, 94 °C stock | `cpu_temperature_limit` |
-| Cross-loading limit | works, 30 W stock | `cpu_cross_loading_powerlimit` |
+| Cross-loading limit | works, 30 W stock; driver clamps to 20–30 W (see below) | `cpu_cross_loading_powerlimit` |
 | EC power window | works, quantised to 4 s | `cpu_l1_tau` |
 | PL1/PL2 coupling | works | `cpu_pl_coupling` |
 | GPU cTGP / PPAB | works, 45 W + 10 W stock | `gpu_ctgp_powerlimit`, `gpu_ppab_powerlimit` |
@@ -148,6 +148,19 @@ model takes the `ACCESS_METHOD_WMI3_CLAMPED` path, where the node carries
 switching to integrated-only under a running X or Wayland session that is bound
 to the dGPU takes the desktop down with it, so the GUI shows the mode and does
 not offer the switch.
+
+The driver clamps every write on that WMI3 path to the per-mode ranges in
+`LENOVO_CAPABILITY_DATA_01`: cross-loading 20–30 W, firmware PL1 25–60 W, PL2
+40–85 W, throttle point 85–100 °C. A 65 W cross-load write lands as 30 W and
+the node reports success. The firmware does not enforce those ranges: its
+setters store the value in the EC and program `value * 8` into the CPU power
+register with no check. `patches/0001-ignore-capdata.patch` adds a
+`legion_laptop.ignore_capdata` module parameter that skips the clamp for PL1,
+PL2 and cross-loading only. The throttle point stays clamped because the
+firmware turns it into a TCC offset of `100 - value`, and so does the EC window,
+because the firmware only programs the discrete tau values it switches on. The
+GUI toggle for the parameter also writes `/etc/modprobe.d/83sc-capdata.conf` so
+the setting holds across reboots.
 
 Beyond the toolkit: RAPL tau, undervolting, and `intel_pstate/max_perf_pct`
 have no Windows-toolkit equivalent and are the settings that actually fixed the

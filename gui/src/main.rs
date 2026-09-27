@@ -50,6 +50,8 @@ fn seed_extras(ui: &MainWindow, e: &hw::Extras) {
     ui.set_tog_flip(e.flip_to_start);
     ui.set_tog_overdrive(e.overdrive);
     ui.set_tog_plcoupling(e.pl_coupling);
+    ui.set_capdata_avail(e.capdata_avail);
+    ui.set_tog_capdata(e.ignore_capdata);
     ui.set_edit_kbd(e.kbd_backlight);
     ui.set_tog_kbd_idle(kbd_idle::enabled());
     ui.set_edit_kbd_idle_secs(kbd_idle::timeout_secs());
@@ -317,6 +319,32 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
                 Err(e) => {
                     seed_extras(&ui, &app.hw.extras());
+                    ui.set_status_error(true);
+                    ui.set_status(e.into());
+                }
+            }
+        }
+    });
+
+    ui.on_set_capdata_limits({
+        let app = app.clone();
+        let w = ui.as_weak();
+        move |on| {
+            let ui = w.unwrap();
+            let res = app.hw.set_capdata_limits(on);
+            seed_extras(&ui, &app.hw.extras());
+            match res {
+                Ok(()) => {
+                    ui.set_status_error(false);
+                    // The flag only affects later writes; whatever the driver
+                    // clamped earlier is still what the EC holds.
+                    ui.set_status(if on {
+                        SharedString::from("firmware ranges off - press Apply EC limits to write past them")
+                    } else {
+                        SharedString::from("firmware ranges on - new writes are clamped to Lenovo's table again")
+                    });
+                }
+                Err(e) => {
                     ui.set_status_error(true);
                     ui.set_status(e.into());
                 }

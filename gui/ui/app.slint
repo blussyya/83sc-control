@@ -149,6 +149,8 @@ export component MainWindow inherits Window {
     in-out property <bool> tog-flip;
     in-out property <bool> tog-overdrive;
     in-out property <bool> tog-plcoupling;
+    in-out property <bool> tog-capdata;
+    in property <bool> capdata-avail;
 
     callback apply-curve();
     callback apply-power();
@@ -164,6 +166,7 @@ export component MainWindow inherits Window {
     callback apply-undervolt();
     callback apply-maxperf();
     callback set-persist(bool);
+    callback set-capdata-limits(bool);
     callback bind-power-source(int, int);
     callback update-profile(int);
     callback set-flag(string, bool);
@@ -575,6 +578,21 @@ export component MainWindow inherits Window {
                                     text: "Couple PL1 and PL2";
                                     checked <=> tog-plcoupling;
                                     toggled => { set-flag("cpu_pl_coupling", self.checked); }
+                                }
+                                CheckBox {
+                                    text: "Ignore Lenovo's CPU power ranges";
+                                    enabled: capdata-avail;
+                                    checked <=> tog-capdata;
+                                    toggled => { set-capdata-limits(self.checked); }
+                                }
+                                Note {
+                                    text: capdata-avail
+                                        ? "Stops the driver clamping cross-loading to 20-30 W (and the "
+                                          + "firmware PL1/PL2 to 25-60 / 40-85 W). The firmware accepts higher "
+                                          + "values; those ranges are Lenovo's thermal policy. Throttle point and "
+                                          + "window stay clamped. Kept across reboots."
+                                        : "Ignoring Lenovo's CPU power ranges needs the patched driver: "
+                                          + "sudo ./install-dkms.sh";
                                 }
                                 Note {
                                     text: "These are the firmware's own limits, separate from the RAPL "
