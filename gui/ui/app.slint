@@ -557,17 +557,17 @@ export component MainWindow inherits Window {
                             VerticalLayout {
                                 spacing: 10px;
                                 SliderRow {
-                                    label: "CPU throttle point"; minimum: 70; maximum: 100;
+                                    label: "CPU throttle point"; minimum: 85; maximum: 100;
                                     unit: "°C"; value: edit-cpu-temp;
                                     changed(v) => { edit-cpu-temp = v; }
                                 }
                                 SliderRow {
-                                    label: "Cross-loading limit"; minimum: 10; maximum: 65;
+                                    label: "Cross-loading limit"; minimum: 20; maximum: 30;
                                     unit: "W"; value: edit-crossload;
                                     changed(v) => { edit-crossload = v; }
                                 }
                                 SliderRow {
-                                    label: "EC power window"; minimum: 4; maximum: 120; step: 4;
+                                    label: "EC power window"; minimum: 20; maximum: 160; step: 4;
                                     unit: "s"; value: edit-ec-tau;
                                     changed(v) => { edit-ec-tau = v; }
                                 }
@@ -579,7 +579,11 @@ export component MainWindow inherits Window {
                                 Note {
                                     text: "These are the firmware's own limits, separate from the RAPL "
                                         + "sliders above. Cross-loading is the CPU's share when the GPU is "
-                                        + "also loaded. The EC window quantises to multiples of 4 s.";
+                                        + "also loaded. The ranges here are what this firmware actually "
+                                        + "accepts; it rejects anything outside them. The window also snaps "
+                                        + "to the steps the EC can encode (20, 24, 28, 32, 40, 48, 56, 64, "
+                                        + "80, 96, 112, 128, 160 s), so a value between two of those moves "
+                                        + "to the nearer one.";
                                 }
                                 Button {
                                     text: "Apply EC limits";
