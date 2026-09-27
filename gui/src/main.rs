@@ -413,45 +413,25 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         move || {
             let ui = w.unwrap();
             let mut errs = Vec::new();
-            let asked = [
+            for (node, val) in [
                 ("cpu_temperature_limit", ui.get_edit_cpu_temp()),
                 ("cpu_cross_loading_powerlimit", ui.get_edit_crossload()),
                 ("cpu_l1_tau", ui.get_edit_ec_tau()),
-            ];
-            for (node, val) in asked {
+            ] {
                 if let Err(e) = app.hw.set_ec(node, val) {
                     errs.push(e);
                 }
             }
             let e = app.hw.extras();
             seed_extras(&ui, &e);
-            // The firmware silently clamps out-of-range values and snaps the
-            // window to the steps it can encode, so a readback that differs
-            // from the request is normal - but saying nothing about it just
-            // looks like the slider was ignored. Name what it changed.
-            let landed = [
-                ("throttle", e.cpu_temp_limit, "C"),
-                ("cross-load", e.cross_loading, "W"),
-                ("window", e.ec_tau, "s"),
-            ];
-            let changed: Vec<String> = asked
-                .iter()
-                .zip(landed.iter())
-                .filter(|((_, want), (_, got, _))| want != got)
-                .map(|((_, want), (label, got, unit))| {
-                    format!("{label} {want}->{got} {unit}")
-                })
-                .collect();
-            let msg = format!(
-                "EC limits applied — throttle {} C, cross-load {} W, window {} s",
-                e.cpu_temp_limit, e.cross_loading, e.ec_tau
+            report(
+                &ui,
+                &errs,
+                &format!(
+                    "EC limits applied — throttle {} C, cross-load {} W, window {} s",
+                    e.cpu_temp_limit, e.cross_loading, e.ec_tau
+                ),
             );
-            let msg = if changed.is_empty() {
-                msg
-            } else {
-                format!("{msg} (firmware adjusted: {})", changed.join(", "))
-            };
-            report(&ui, &errs, &msg);
         }
     });
 
