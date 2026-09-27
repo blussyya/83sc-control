@@ -63,6 +63,26 @@ fn seed_extras(ui: &MainWindow, e: &hw::Extras) {
     ui.set_edit_gpu_offset(e.gpu_target_offset);
 }
 
+fn to_stats(t: &hw::Telemetry) -> Stats {
+    Stats {
+        cpu_temp: t.cpu_temp,
+        gpu_temp: t.gpu_temp,
+        fan_rpm: t.fan_rpm,
+        fan_max: t.fan_max,
+        cpu_mhz: t.cpu_mhz,
+        gpu_watts: t.gpu_watts,
+        pl1: t.pl1,
+        pl2: t.pl2,
+        tau: t.tau,
+        powermode: t.powermode,
+        mode_name: profiles::mode_name(t.powermode).into(),
+        prochot: t.prochot,
+        undervolt_mv: t.undervolt_mv,
+        max_perf_pct: t.max_perf_pct,
+        on_battery: t.on_battery,
+    }
+}
+
 fn to_curve_model(pts: &[(i32, i32)]) -> ModelRc<CurvePoint> {
     ModelRc::new(VecModel::from(
         pts.iter().map(|(t, r)| CurvePoint { temp: *t, rpm: *r }).collect::<Vec<_>>(),
@@ -133,6 +153,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let (ctgp, ppab) = app.hw.gpu_limits();
     ui.set_edit_ctgp(ctgp);
     ui.set_edit_ppab(ppab);
+    // Without this the header, fan chart and sliders render against an all-zero
+    // Stats (fan-max 0) until the first poll tick, 1.5 s or more after startup.
+    ui.set_stats(to_stats(&t0));
     ui.set_edit_uv(t0.undervolt_mv);
     ui.set_edit_maxperf(if t0.max_perf_pct > 0 { t0.max_perf_pct } else { 100 });
     ui.set_persist(app.cfg.borrow().persist);
@@ -873,23 +896,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     None => return,
                 };
                 let t = app.hw.telemetry();
-                ui.set_stats(Stats {
-                    cpu_temp: t.cpu_temp,
-                    gpu_temp: t.gpu_temp,
-                    fan_rpm: t.fan_rpm,
-                    fan_max: t.fan_max,
-                    cpu_mhz: t.cpu_mhz,
-                    gpu_watts: t.gpu_watts,
-                    pl1: t.pl1,
-                    pl2: t.pl2,
-                    tau: t.tau,
-                    powermode: t.powermode,
-                    mode_name: profiles::mode_name(t.powermode).into(),
-                    prochot: t.prochot,
-                    undervolt_mv: t.undervolt_mv,
-                    max_perf_pct: t.max_perf_pct,
-                    on_battery: t.on_battery,
-                });
+                ui.set_stats(to_stats(&t));
 
                 // A power mode change outside this app (keyboard shortcut,
                 // another tool) reloads the EC table, so a bound profile has to

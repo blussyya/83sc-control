@@ -344,7 +344,7 @@ export component MainWindow inherits Window {
                                         spacing: 3px;
                                         Rectangle { }  // spacer pushes the bar down
                                         Rectangle {
-                                            height: 92px * (p.rpm / max(stats.fan-max, 1));
+                                            height: 92px * clamp(p.rpm / max(stats.fan-max, 1), 0, 1);
                                             background: @linear-gradient(180deg, #8ab4f8 0%, #4a6fa5 100%);
                                             border-radius: 3px;
                                         }
