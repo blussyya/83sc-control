@@ -1,5 +1,5 @@
 Name:           83sc-control
-Version:        1.1.0
+Version:        1.1.1
 Release:        1%{?dist}
 Summary:        Thermal, power and fan control for the Lenovo LOQ Essential 15IRX11 (83SC)
 
@@ -92,6 +92,9 @@ fi
 %systemd_postun_with_restart 83sc-thermal.service
 
 %changelog
+* Sun Sep 27 2026 blussyya <https://github.com/blussyya> - 1.1.1-1
+- Desktop entry launches legion83-gui from PATH (was /usr/local/bin).
+
 * Sun Sep 27 2026 blussyya <https://github.com/blussyya> - 1.1.0-1
 - Ship the patched legion_laptop as a DKMS module; enable services on install.
 
