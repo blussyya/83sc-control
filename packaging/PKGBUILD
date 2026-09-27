@@ -1,15 +1,16 @@
 # Maintainer: blussyya <https://github.com/blussyya>
 pkgname=83sc-control
-pkgver=1.0.0
+# VERSION at the repo root is the single source of truth; CI releases on a bump
+pkgver=$(<"$startdir/../VERSION")
 pkgrel=1
 pkgdesc="Thermal, power and fan control for the Lenovo LOQ Essential 15IRX11 (83SC)"
 arch=('x86_64')
 url="https://github.com/blussyya/83sc-control"
 license=('GPL-2.0-or-later')
-depends=('python' 'systemd' 'polkit')
-optdepends=('lenovolegionlinux>=0.0.26: fan curve control (required for fan features)'
+depends=('python' 'systemd' 'dkms')
+optdepends=('linux-headers: build the driver for the stock kernel (pick the headers matching your kernel)'
             'intel-undervolt: apply a CPU voltage offset at boot')
-makedepends=('cargo' 'git')
+makedepends=('cargo' 'patch')
 # the rust release profile already strips; a -debug package would be empty
 options=(!debug)
 source=()
@@ -47,6 +48,15 @@ package() {
         > "$srcdir/83sc-kbd-idle.service"
     install -Dm644 "$srcdir/83sc-kbd-idle.service" \
         "$pkgdir/usr/lib/systemd/user/83sc-kbd-idle.service"
+
+    install -Dm755 packaging/driver-setup.sh         "$pkgdir/usr/lib/83sc-control/driver-setup.sh"
+    # the dkms alpm hook builds it for every installed kernel after the transaction
+    packaging/stage-driver.sh "$pkgdir/usr/src/LenovoLegionLinux-83sc"
+    # after 70-dkms-install: re-assert ours whenever a kernel/dkms update could
+    # let the stock module win
+    sed -e 's#/usr/local/lib/#/usr/lib/#g' -e 's#^Target = lenovolegionlinux$#&\nTarget = 83sc-control#' \
+        pacman/83sc-driver.hook > "$srcdir/83sc-driver.hook"
+    install -Dm644 "$srcdir/83sc-driver.hook" "$pkgdir/usr/share/libalpm/hooks/90-83sc-driver.hook"
 
     install -Dm644 gui/83sc-control.desktop "$pkgdir/usr/share/applications/83sc-control.desktop"
     sed 's/%ADMINGROUP%/%wheel/' packaging/83sc-control.sudoers > "$srcdir/sudoers"

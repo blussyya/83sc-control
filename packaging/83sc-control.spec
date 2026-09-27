@@ -1,5 +1,5 @@
 Name:           83sc-control
-Version:        1.0.0
+Version:        1.1.0
 Release:        1%{?dist}
 Summary:        Thermal, power and fan control for the Lenovo LOQ Essential 15IRX11 (83SC)
 
@@ -13,15 +13,18 @@ Source0:        %{name}-%{version}.tar.gz
 
 BuildRequires:  cargo
 BuildRequires:  gcc
+BuildRequires:  patch
 Requires:       python3
 Requires:       systemd
+Requires:       dkms
+Recommends:     kernel-devel
 Recommends:     intel-undervolt
 
 %description
 Power limits, fan curve, undervolt and keyboard controls for the Lenovo LOQ
 Essential 15IRX11 (DMI 83SC, i7-13650HX / RTX 5050), with a GUI and CLI tools.
-Settings are replayed at boot by a systemd service. Fan control requires
-legion_laptop carrying the 83SC fixes (LenovoLegionLinux >= v0.0.26).
+Settings are replayed at boot by a systemd service. Ships the patched
+legion_laptop driver as a DKMS module, rebuilt on every kernel update.
 
 %prep
 %autosetup
@@ -41,6 +44,8 @@ done
 install -Dm755 helper/helper.py             %{buildroot}%{_prefix}/lib/83sc-control/helper.py
 install -Dm755 systemd/83sc-thermal.sh      %{buildroot}%{_prefix}/lib/83sc-control/83sc-thermal.sh
 install -Dm755 systemd/83sc-driver-guard.sh %{buildroot}%{_prefix}/lib/83sc-control/83sc-driver-guard.sh
+install -Dm755 packaging/driver-setup.sh     %{buildroot}%{_prefix}/lib/83sc-control/driver-setup.sh
+packaging/stage-driver.sh %{buildroot}%{_usrsrc}/LenovoLegionLinux-83sc
 for u in 83sc-thermal 83sc-driver-guard; do
     sed 's#/usr/local/lib/#/usr/lib/#' systemd/$u.service > $u.service.out
     install -Dm644 $u.service.out %{buildroot}%{_unitdir}/$u.service
@@ -61,6 +66,7 @@ install -Dm440 sudoers.out %{buildroot}%{_sysconfdir}/sudoers.d/83sc-control
 %{_bindir}/83sc-kbd-idle
 %{_bindir}/legion83-gui
 %{_prefix}/lib/83sc-control/
+%{_usrsrc}/LenovoLegionLinux-83sc/
 %{_unitdir}/83sc-thermal.service
 %{_unitdir}/83sc-driver-guard.service
 %{_userunitdir}/83sc-kbd-idle.service
@@ -69,13 +75,25 @@ install -Dm440 sudoers.out %{buildroot}%{_sysconfdir}/sudoers.d/83sc-control
 
 %post
 %systemd_post 83sc-thermal.service 83sc-driver-guard.service
+%{_prefix}/lib/83sc-control/driver-setup.sh install
+if [ $1 -eq 1 ]; then
+    systemctl enable 83sc-driver-guard.service 83sc-thermal.service >/dev/null 2>&1 || :
+    systemctl --global enable 83sc-kbd-idle.service >/dev/null 2>&1 || :
+fi
 
 %preun
 %systemd_preun 83sc-thermal.service 83sc-driver-guard.service
+if [ $1 -eq 0 ]; then
+    systemctl --global disable 83sc-kbd-idle.service >/dev/null 2>&1 || :
+    %{_prefix}/lib/83sc-control/driver-setup.sh remove
+fi
 
 %postun
 %systemd_postun_with_restart 83sc-thermal.service
 
 %changelog
+* Sun Sep 27 2026 blussyya <https://github.com/blussyya> - 1.1.0-1
+- Ship the patched legion_laptop as a DKMS module; enable services on install.
+
 * Sat Sep 12 2026 blussyya <https://github.com/blussyya> - 1.0.0-1
 - Initial package.

@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # Build a .deb. Works on any distro that has dpkg-deb + cargo.
-#   ./packaging/build-deb.sh   ->  dist/83sc-control_1.0.0_amd64.deb
+#   ./packaging/build-deb.sh   ->  dist/83sc-control_<VERSION>_amd64.deb
 set -euo pipefail
-VER="${VER:-1.0.0}"
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+VER="${VER:-$(<"$ROOT/VERSION")}"
 OUT="$ROOT/dist"; STAGE="$(mktemp -d)"
 trap 'rm -rf "$STAGE"' EXIT
 chmod 755 "$STAGE"
@@ -22,6 +22,8 @@ done
 install -Dm755 "$ROOT/helper/helper.py"             "$STAGE/usr/lib/83sc-control/helper.py"
 install -Dm755 "$ROOT/systemd/83sc-thermal.sh"      "$STAGE/usr/lib/83sc-control/83sc-thermal.sh"
 install -Dm755 "$ROOT/systemd/83sc-driver-guard.sh" "$STAGE/usr/lib/83sc-control/83sc-driver-guard.sh"
+install -Dm755 "$ROOT/packaging/driver-setup.sh"   "$STAGE/usr/lib/83sc-control/driver-setup.sh"
+"$ROOT/packaging/stage-driver.sh" "$STAGE/usr/src/LenovoLegionLinux-83sc"
 for u in 83sc-thermal 83sc-driver-guard; do
     sed 's#/usr/local/lib/#/usr/lib/#' "$ROOT/systemd/$u.service" \
         > "$STAGE/tmp.service"
@@ -42,30 +44,37 @@ Version: $VER
 Section: utils
 Priority: optional
 Architecture: amd64
-Depends: python3, systemd, libc6
-Recommends: intel-undervolt
+Depends: python3, systemd, libc6, dkms
+Recommends: linux-headers-amd64 | linux-headers-generic, intel-undervolt
 Maintainer: blussyya <https://github.com/blussyya>
 Description: Thermal, power and fan control for Lenovo LOQ Essential 15IRX11
  Power limits, fan curve, undervolt and keyboard controls for the Lenovo LOQ
  Essential 15IRX11 (DMI 83SC), with a GUI and CLI tools. Settings are replayed
- at boot. Fan control requires legion_laptop with the 83SC fixes
- (LenovoLegionLinux >= v0.0.26).
+ at boot. Ships the patched legion_laptop driver as a DKMS module, rebuilt
+ on every kernel update.
 CTRL
 cat > "$STAGE/DEBIAN/postinst" <<'POST'
 #!/bin/sh
 set -e
+[ "$1" = configure ] || exit 0
 systemctl daemon-reload || true
+/usr/lib/83sc-control/driver-setup.sh install
+if [ -z "$2" ]; then
+    systemctl enable 83sc-driver-guard.service 83sc-thermal.service >/dev/null 2>&1 || true
+    systemctl --global enable 83sc-kbd-idle.service >/dev/null 2>&1 || true
+fi
 echo ""
-echo "  83sc-control installed."
-echo "    sudo systemctl enable --now 83sc-driver-guard 83sc-thermal"
-echo "    systemctl --user enable --now 83sc-kbd-idle"
-echo "  Then apply settings in '83SC Control' and run: sudo 83sc boot-save"
+echo "  83sc-control installed. Open '83SC Control' from the app menu."
+echo "  The keyboard idle dimmer starts at your next login."
 echo ""
 POST
 cat > "$STAGE/DEBIAN/prerm" <<'PRE'
 #!/bin/sh
 set -e
+[ "$1" = remove ] || exit 0
 systemctl disable --now 83sc-thermal 83sc-driver-guard 2>/dev/null || true
+systemctl --global disable 83sc-kbd-idle.service 2>/dev/null || true
+/usr/lib/83sc-control/driver-setup.sh remove
 PRE
 chmod 755 "$STAGE/DEBIAN/postinst" "$STAGE/DEBIAN/prerm"
 

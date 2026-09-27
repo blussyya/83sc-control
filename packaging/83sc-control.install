@@ -1,21 +1,27 @@
+# The driver itself is built by dkms's own alpm hook after the transaction,
+# then 90-83sc-driver.hook swaps it in. Only services are handled here.
 post_install() {
     systemctl daemon-reload || true
+    systemctl enable 83sc-driver-guard.service 83sc-thermal.service 2>/dev/null || true
+    systemctl --global enable 83sc-kbd-idle.service 2>/dev/null || true
     cat <<'MSG'
 
-  83sc-control installed.
+  83sc-control installed. The patched legion_laptop driver is built by DKMS
+  for every kernel that has headers installed, and rebuilt on kernel updates.
 
-    sudo systemctl enable --now 83sc-driver-guard 83sc-thermal
-    systemctl --user enable --now 83sc-kbd-idle
+  Open "83SC Control" from the app menu. Settings you apply there are
+  restored at boot while "restore at boot" is ticked.
 
-  Apply your settings in "83SC Control" (app menu), then run
-  `sudo 83sc boot-save` so they replay at boot.
-
-  Fan control needs legion_laptop with the 83SC fixes (LenovoLegionLinux
-  >= v0.0.26). Check with: 83sc-fan show
+  The keyboard idle dimmer starts at your next login
+  (or now: systemctl --user start 83sc-kbd-idle).
 
 MSG
 }
-post_upgrade() { post_install; }
+post_upgrade() {
+    systemctl daemon-reload || true
+}
 pre_remove() {
-    systemctl disable --now 83sc-thermal 83sc-driver-guard 2>/dev/null || true
+    systemctl disable --now 83sc-thermal.service 83sc-driver-guard.service 2>/dev/null || true
+    systemctl --global disable 83sc-kbd-idle.service 2>/dev/null || true
+    /usr/lib/83sc-control/driver-setup.sh remove
 }

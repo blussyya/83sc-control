@@ -54,10 +54,11 @@ lenovolegionlinux`) once you are happy the patched DKMS covers everything.
 
 ## Kernel upgrade (same distro)
 
-- **DKMS rebuilds the driver automatically.** `install-dkms.sh` registers the
-  patched module with `AUTOINSTALL=yes`, so a new kernel triggers a rebuild.
-  It needs `dkms` and the matching kernel headers installed — that's the only
-  requirement. It auto-detects clang- vs gcc-built kernels.
+- **DKMS rebuilds the driver automatically.** The package (or
+  `install-dkms.sh`) registers the patched module with `AUTOINSTALL=yes`, so a
+  new kernel triggers a rebuild. It needs `dkms` and the matching kernel
+  headers installed — that's the only requirement. dkms itself picks clang
+  (`LLVM=1`) or gcc to match how the kernel was built.
 - **If your new kernel already ships the upstream fix**, you don't need the
   DKMS override at all. Remove it with `sudo ./install-dkms.sh --remove` and
   rely on the stock module. The stock module has no `ignore_capdata`, so the
@@ -68,7 +69,12 @@ lenovolegionlinux`) once you are happy the patched DKMS covers everything.
 
 ## Moving to another distro (e.g. Debian)
 
-Run `sudo ./install-all.sh`. It is distro-agnostic — it checks for what each
+Easiest: install the `.deb` / `.rpm` / Arch package from the GitHub release. It
+carries the patched driver source (`/usr/src/LenovoLegionLinux-83sc`) and
+registers it with DKMS on install, so all you need is `dkms` and your kernel's
+headers. Copy `/etc/83sc-control/boot.conf` across or just re-apply in the GUI.
+
+From a clone instead: run `./setup.sh`. `setup.sh` is distro-agnostic — it checks for what each
 step needs and names the Debian packages if something's missing. Manual
 equivalent:
 
@@ -89,7 +95,7 @@ equivalent:
 - **The compiled binaries** (`legion83-gui`, `83sc-kbd-idle`) are linked
   against this machine's glibc. **Do not copy the binaries to Debian** — build
   from source there (`cargo build --release`). The source is in the repo;
-  `install-all.sh` builds them for you.
+  `setup.sh` and the packages build them for you.
 - **The idle dimmer needs a Wayland compositor implementing
   `ext-idle-notify-v1`** (KWin/wlroots do). On X11 or a compositor without it,
   the dimmer won't arm — it fails loudly rather than misbehaving. Everything

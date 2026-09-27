@@ -15,5 +15,5 @@ Target = dkms
 [Action]
 Description = Ensuring patched legion_laptop (83sc) wins over the stock module...
 When = PostTransaction
-Exec = /usr/local/lib/83sc-control/83sc-driver-guard.sh
+Exec = /bin/sh -c '[ ! -x /usr/local/lib/83sc-control/83sc-driver-guard.sh ] || exec /usr/local/lib/83sc-control/83sc-driver-guard.sh'
 Depends = dkms

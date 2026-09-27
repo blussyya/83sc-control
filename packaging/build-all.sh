@@ -3,6 +3,7 @@
 #   ./packaging/build-all.sh   ->  dist/
 set -uo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+VER="$(<"$ROOT/VERSION")"
 mkdir -p "$ROOT/dist"
 built=0
 
@@ -24,9 +25,9 @@ fi
 
 if command -v rpmbuild >/dev/null; then
     echo "==> .rpm"
-    TAR="$ROOT/dist/83sc-control-1.0.0.tar.gz"
-    ( cd "$ROOT/.." && tar czf "$TAR" --transform 's,^[^/]*,83sc-control-1.0.0,' \
-        "$(basename "$ROOT")" ) 2>/dev/null
+    TAR="$ROOT/dist/83sc-control-$VER.tar.gz"
+    ( cd "$ROOT/.." && tar czf "$TAR" --exclude=target --exclude=dist \
+        --transform "s,^[^/]*,83sc-control-$VER," "$(basename "$ROOT")" ) 2>/dev/null
     rpmbuild -ta "$TAR" && built=$((built+1))
 else
     echo "-- skipping .rpm (needs rpmbuild; the spec is at packaging/83sc-control.spec)"

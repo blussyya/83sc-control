@@ -13,59 +13,72 @@ dropping PL1 to 45W with a 8s window holds 70–72C and no throttling under a
 
 ## Install
 
-**Arch**
+grab the package for your distro from
+[Releases](https://github.com/blussyya/83sc-control/releases/latest), it has everything:
+the GUI, CLI, boot service, and the patched `legion_laptop` driver (built by DKMS
+for your kernel, rebuilt on every kernel update). services are enabled on install
+
+you need your kernel's headers installed so DKMS can build the driver
+
+**Arch / CachyOS**
 
 ```bash
-cd packaging && makepkg -si
+sudo pacman -S --needed dkms linux-headers   # or the headers for your kernel, e.g. linux-cachyos-lts-headers
+sudo pacman -U 83sc-control-*.pkg.tar.zst
 ```
 
-**Debian/Ubuntu**
+**Debian / Ubuntu**
 
 ```bash
-./packaging/build-deb.sh && sudo apt install ./dist/83sc-control_1.0.0_amd64.deb
+sudo apt install ./83sc-control_*_amd64.deb
 ```
 
 **Fedora**
 
 ```bash
-rpmbuild -ta 83sc-control-1.0.0.tar.gz   # spec: packaging/83sc-control.spec
+sudo dnf install ./83sc-control-*.x86_64.rpm
 ```
 
-**from source**
+with Secure Boot on, the driver has to be signed: Debian/Ubuntu's dkms prompts you to
+enroll its key (MOK) on first install, reboot once and accept it. on Fedora/Arch set up
+dkms signing or the module wont load
+
+**from source** (any distro)
 
 ```bash
 ./setup.sh
 ```
 
 run `setup.sh` as your normal user, it elevates for the privileged parts and drops back
-to your session for the user service
-re-run it after a kernel upgrade as it wont stick
-build every package your machine has tooling for: `./packaging/build-all.sh`
-`./setup.sh --remove` undoes it all
+to your session for the user service. `./setup.sh --remove` undoes it all.
+to build the packages yourself: `./packaging/build-all.sh`
 
+### releasing
+
+bump `VERSION` and push to master, CI builds all three packages and publishes them as
+release `v<VERSION>`. every other push still builds them (under the run's artifacts)
 
 ### After installing
 
-```bash
-sudo systemctl enable --now 83sc-driver-guard 83sc-thermal
-systemctl --user enable --now 83sc-kbd-idle
-```
-
-set what you want in **83SC Control** (app menu), then `sudo 83sc boot-save` to have it
-replay at boot.
+set what you want in **83SC Control** (app menu). with "restore at boot" ticked, whatever
+you apply is replayed at boot
 
 ## requirements
 
-- fan control needs `legion_laptop` with the 83SC fixes — **LenovoLegionLinux ≥ v0.0.26**.
-  older versions return zeroed fan-curve temps and reject writes
+- the packages ship the driver, nothing else to install for fan control. from source,
+  `install-dkms.sh` does the same (`driver/` is upstream LenovoLegionLinux v0.0.26 plus
+  `patches/`)
 - `intel-undervolt` (optional) to apply a voltage offset at boot if you wanna undervolt
 - power limits work on any kernel, they use mainline `intel_rapl`, not a lenovo driver
+- the GUI works on any Wayland or X11 desktop. the idle dimmer needs a Wayland
+  compositor with `ext-idle-notify-v1` (KDE, Hyprland, Sway, niri, COSMIC), and profile
+  binding to power plans needs `power-profiles-daemon` (or `tuned-ppd`)
 
 ## whats in the package
 
 | | |
 |---|---|
-| `83SC Control` | GUI: fan curve, power limits, undervolt, profiles bound to KDE power plans |
+| `83SC Control` | GUI: fan curve, power limits, undervolt, profiles bound to power plans |
 | `83sc-fan` | show or set the fan curve |
 | `83sc-diag` | thermal and power-limit diagnostics |
 | `83sc-snap` | one-shot state dump |
